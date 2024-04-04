@@ -1,0 +1,14 @@
+# Ignora i file di sistema Mac
+.DS_store
+
+# Ignora i file metals
+.metals/
+
+# Ignora i file vsCode
+.vscode/
+
+# Ignora tutti i file project
+scala/Mean/project/
+
+# Ignora tutti i file target
+scala/Mean/target/
