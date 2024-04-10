@@ -11,6 +11,10 @@ import org.apache.hadoop.hbase.{HBaseConfiguration, TableName}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 
+import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.types._
+
 object Mean {
 
   def main(args: Array[String]) = {
@@ -96,9 +100,43 @@ object Mean {
 
     // TODO - framework issue - as many paths as hpackets inside input configuration. After that, how many dataframes do we have? ...
     // TODO: ... one for each path or one containing all hpackets?
-    val path = hdfsBasePath + "/" + hPacketId + "/20*"  // get all avro files inside year path
+    val path = hdfsBasePath + "/" + hPacketId + "/2024"  // deve partire ricorsione per trovare ultima cartella
 
-    val hPacket = spark.read.format("avro").load(path)
+    // Ottieni il FileSystem per il percorso HDFS
+    spark.sparkContext.hadoopConfiguration.set("fs.defaultFS", fsDefaultFs)
+    val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)
+
+    // Ottieni la lista di tutti i file Avro nella cartella HDFS
+    val avroFiles = fs.listStatus(new Path(path))
+      .filter(_.getPath.getName.endsWith(".avro"))
+      .map(_.getPath.toString)
+
+    // Leggi i file Avro uno ad uno e crea i DataFrame corrispondenti
+    val dfs: Seq[DataFrame] = avroFiles.map { file =>
+      val df = spark.read.format("avro").load(file)
+
+      df.select(explode(map_values(col("fields"))).as("hPacketField"))    // explode HPacketFields and rename column
+      .filter(col("hPacketField.id") === hPacketFieldId)                      // get target HPacketFields // todo - framework issue: === must be something like IN(hPacketFieldIds)
+      .select(                                                                         // get values
+        col("hPacketField.value.member0"),
+        col("hPacketField.value.member1"),
+        col("hPacketField.value.member2"),
+        col("hPacketField.value.member3"),
+        col("hPacketField.value.member4"),
+        col("hPacketField.value.member5")
+      )
+    }
+
+    val schemas = dfs.map(_.schema)
+    val unifiedSchema = schemas.reduce((schema1, schema2) => StructType(schema1.fields ++ schema2.fields))
+
+    val dfsWithUnifiedSchema = dfs.map(df => {
+      val missingColumns = unifiedSchema.fieldNames.toSet.diff(df.columns.toSet)
+      missingColumns.foldLeft(df)((acc, colName) => acc.withColumn(colName, lit(null)))
+    })
+
+    // Unisce i DataFrame in uno unico
+    val values: DataFrame = dfsWithUnifiedSchema.reduce(_.union(_))
 
     /*
       Goal: get value of HPacketField.
@@ -130,7 +168,7 @@ object Mean {
 
 
       This struct has keys with prefix "member", i.e. member0, member1, member2, member3, member4 and member5.
-      Each key has a value associated to it of a specific type (integer, long, float, double, boolean, string).
+      Each key has a value associated to it of a specific type ( , long, float, double, boolean, string).
       One of these value is not equal to null at most. See the example:
 
       +------+-------+-------+-------+------------------+-------+-------+
@@ -152,26 +190,14 @@ object Mean {
       Get back the original type of selected value through the type of configuration input
 
     */
-    val value = hPacket
-      .select(explode(map_values(col("fields"))).as("hPacketField"))    // explode HPacketFields and rename column
-      .filter(col("hPacketField.id") === hPacketFieldId)                      // get target HPacketFields // todo - framework issue: === must be something like IN(hPacketFieldIds)
-      .select(                                                                         // get values
-        col("hPacketField.value.member0"),
-        col("hPacketField.value.member1"),
-        col("hPacketField.value.member2"),
-        col("hPacketField.value.member3"),
-        col("hPacketField.value.member4"),
-        col("hPacketField.value.member5"),
-        col("hPacketField.value.member6")
-      )
 
-    val output = value
+    val output = values
       .select(coalesce(                                                                             // coalesce
         col("member0").cast("string"), col("member1").cast("string"),
         col("member2").cast("string"), col("member3").cast("string"),
-        col("member4").cast("string"), col("member5").cast("string"),
-        col("member6").cast("string"))
-        .as("value"))                                                                        // rename column
+        col("member4").cast("string"), 
+        col("member5").cast("string"))
+        .as("value"))                                                                        // rename column                                             // rename column
       .select(col("value").cast(hPacketFieldType))                                        // cast
       // TODO - framework issue: here user job starts. Before he has received a dataframe, according to input configuration
       .select(avg(col("value")).as(outputName)) // compute mean // TODO: change colName value with name of input
