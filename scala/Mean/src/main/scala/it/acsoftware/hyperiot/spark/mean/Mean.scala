@@ -10,12 +10,20 @@ import org.apache.hadoop.hbase.util.Bytes
 import org.apache.hadoop.hbase.{HBaseConfiguration, TableName}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
-
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.types._
+import scala.collection.mutable.ArrayBuffer
 
 object Mean {
+
+  // Funzione ricorsiva per cercare tutte le cartelle nel percorso specificato
+  def getFolders(fs: FileSystem, path: Path): Seq[String] = {
+    val statuses = fs.listStatus(path)
+    val folders = statuses.filter(_.isDirectory).map(_.getPath.toString)
+    val subFolders = statuses.filter(_.isDirectory).flatMap(status => getFolders(fs, status.getPath))
+    folders ++ subFolders
+  }
 
   def main(args: Array[String]) = {
 
@@ -100,16 +108,28 @@ object Mean {
 
     // TODO - framework issue - as many paths as hpackets inside input configuration. After that, how many dataframes do we have? ...
     // TODO: ... one for each path or one containing all hpackets?
-    val path = hdfsBasePath + "/" + hPacketId + "/2024"  // deve partire ricorsione per trovare ultima cartella
+    val path = hdfsBasePath + "/" + hPacketId //ALL FILES .AVRO
 
     // Ottieni il FileSystem per il percorso HDFS
     spark.sparkContext.hadoopConfiguration.set("fs.defaultFS", fsDefaultFs)
     val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)
 
-    // Ottieni la lista di tutti i file Avro nella cartella HDFS
-    val avroFiles = fs.listStatus(new Path(path))
-      .filter(_.getPath.getName.endsWith(".avro"))
-      .map(_.getPath.toString)
+    // Ottieni la lista di tutte le cartelle nel percorso HDFS
+    val allFolders = getFolders(fs, new Path(path))
+
+    // Crea un ArrayBuffer per memorizzare i percorsi di tutti i file Avro
+    val avroFilesBuffer = ArrayBuffer[String]()
+
+    // Per ogni sottocartella, ottieni la lista di file Avro e aggiungili all'ArrayBuffer
+    allFolders.foreach { folder =>
+      val avroFiles = fs.listStatus(new Path(folder))
+        .filter(_.getPath.getName.endsWith(".avro"))
+        .map(_.getPath.toString)
+      avroFilesBuffer ++= avroFiles
+    }
+
+    // Converti l'ArrayBuffer in una sequenza immutabile
+    val avroFiles = avroFilesBuffer.toSeq
 
     // Leggi i file Avro uno ad uno e crea i DataFrame corrispondenti
     val dfs: Seq[DataFrame] = avroFiles.map { file =>
@@ -171,6 +191,7 @@ object Mean {
       Each key has a value associated to it of a specific type ( , long, float, double, boolean, string).
       One of these value is not equal to null at most. See the example:
 
+      SCALAR SCHEMA:
       +------+-------+-------+-------+------------------+-------+-------+
       |type  |member0|member1|member2|member3           |member4|member5|
       +------+-------+-------+-------+------------------+-------+-------+
