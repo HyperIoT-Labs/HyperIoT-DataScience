@@ -6,7 +6,7 @@ The statistics algorithms are written in Scala and run using Apache Spark. Befor
 
 The statistics available at the moment are:
 
- - Mean
+ - Global Scalar MEAN
  - Standard Deviation
  - Maximum
  - Minimum
@@ -19,3 +19,6 @@ Versions of technologies used in the process:
  - [x] Circe 0.13.0
  - [x] HBase 2.5.3
  - [x] sbt 1.6.0
+
+ # jars
+ Inside the folder 'jars' you can find the statistics already built.

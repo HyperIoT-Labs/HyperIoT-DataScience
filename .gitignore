@@ -8,7 +8,7 @@
 .vscode/
 
 # Ignora tutti i file project
-scala/Mean/project/
+scala/GlobalScalarMean/project/
 
 # Ignora tutti i file target
-scala/Mean/target/
+scala/GlobalScalarMean/target/
