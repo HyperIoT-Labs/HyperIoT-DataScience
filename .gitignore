@@ -9,6 +9,12 @@
 
 # Ignora tutti i file project
 scala/GlobalScalarMean/project/
+scala/GlobalScalarDevStd/project/
+scala/GlobalScalarMinimum/project/
+scala/GlobalScalarMaximum/project/
 
 # Ignora tutti i file target
 scala/GlobalScalarMean/target/
+scala/GlobalScalarDevStd/target/
+scala/GlobalScalarMinimum/project/
+scala/GlobalScalarMaximum/project/

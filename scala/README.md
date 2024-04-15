@@ -7,7 +7,7 @@ The statistics algorithms are written in Scala and run using Apache Spark. Befor
 The statistics available at the moment are:
 
  - Global Scalar MEAN
- - Standard Deviation
+ - Global Scalar STANDARD DEVIATION
  - Maximum
  - Minimum
 
