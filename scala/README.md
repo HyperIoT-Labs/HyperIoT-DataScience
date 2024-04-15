@@ -8,8 +8,8 @@ The statistics available at the moment are:
 
  - Global Scalar MEAN
  - Global Scalar STANDARD DEVIATION
- - Maximum
- - Minimum
+ - Global Scalar MAXIMUM
+ - Global Scalar MINIMUM
 
 Versions of technologies used in the process:
  

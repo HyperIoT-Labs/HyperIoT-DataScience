@@ -16,5 +16,5 @@ scala/GlobalScalarMaximum/project/
 # Ignora tutti i file target
 scala/GlobalScalarMean/target/
 scala/GlobalScalarDevStd/target/
-scala/GlobalScalarMinimum/project/
-scala/GlobalScalarMaximum/project/
+scala/GlobalScalarMinimum/target/
+scala/GlobalScalarMaximum/target/
