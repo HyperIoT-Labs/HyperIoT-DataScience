@@ -12,9 +12,11 @@ scala/GlobalScalarMean/project/
 scala/GlobalScalarDevStd/project/
 scala/GlobalScalarMinimum/project/
 scala/GlobalScalarMaximum/project/
+scala/CountBy/project/
 
 # Ignora tutti i file target
 scala/GlobalScalarMean/target/
 scala/GlobalScalarDevStd/target/
 scala/GlobalScalarMinimum/target/
 scala/GlobalScalarMaximum/target/
+scala/CountBy/target/

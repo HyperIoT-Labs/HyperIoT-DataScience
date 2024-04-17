@@ -133,18 +133,26 @@ object GlobalScalarMean {
 
     // Leggi i file Avro uno ad uno e crea i DataFrame corrispondenti
     val dfs: Seq[DataFrame] = avroFiles.map { file =>
-      val df = spark.read.format("avro").load(file)
 
-      df.select(explode(map_values(col("fields"))).as("hPacketField"))    // explode HPacketFields and rename column
-      .filter(col("hPacketField.id") === hPacketFieldId)                      // get target HPacketFields // todo - framework issue: === must be something like IN(hPacketFieldIds)
-      .select(                                                                         // get values
-        col("hPacketField.value.member0"),
-        col("hPacketField.value.member1"),
-        col("hPacketField.value.member2"),
-        col("hPacketField.value.member3"),
-        col("hPacketField.value.member4"),
-        col("hPacketField.value.member5")
-      )
+      try {
+        val df = spark.read.format("avro").load(file)
+
+        df.select(explode(map_values(col("fields"))).as("hPacketField"))    // explode HPacketFields and rename column
+        .filter(col("hPacketField.id") === hPacketFieldId)                      // get target HPacketFields // todo - framework issue: === must be something like IN(hPacketFieldIds)
+        .select(                                                                         // get values
+          col("hPacketField.value.member0"),
+          col("hPacketField.value.member1"),
+          col("hPacketField.value.member2"),
+          col("hPacketField.value.member3"),
+          col("hPacketField.value.member4"),
+          col("hPacketField.value.member5")
+        )
+      } catch {
+          case ex: Throwable => 
+            println("Exception: " + ex.getMessage)
+            spark.emptyDataFrame // Ritorna un DataFrame vuoto in caso di eccezione
+        }
+
     }
 
     val schemas = dfs.map(_.schema)
