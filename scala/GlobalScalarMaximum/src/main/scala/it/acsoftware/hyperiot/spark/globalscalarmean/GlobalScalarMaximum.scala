@@ -15,6 +15,11 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.types._
 import scala.collection.mutable.ArrayBuffer
 
+import org.json4s._
+import org.json4s.jackson.Serialization
+
+import java.time.Instant
+
 object GlobalScalarMaximum {
 
   // Funzione ricorsiva per cercare tutte le cartelle nel percorso specificato
@@ -23,6 +28,26 @@ object GlobalScalarMaximum {
     val folders = statuses.filter(_.isDirectory).map(_.getPath.toString)
     val subFolders = statuses.filter(_.isDirectory).flatMap(status => getFolders(fs, status.getPath))
     folders ++ subFolders
+  }
+
+  // Funzione per scrivere l'oggetto in HBase
+  def writeToHBase(rowKey: String, value: String, hBaseTable: org.apache.hadoop.hbase.client.Table): Unit = {
+    val put = new Put(Bytes.toBytes(rowKey))
+    put.addColumn(Bytes.toBytes("value"), Bytes.toBytes("output"), Bytes.toBytes(value))
+    hBaseTable.put(put)
+  }
+
+  // Funzione per concatenare le righe del DataFrame in un unico oggetto JSON
+  def concatenateRowsToJson(df: DataFrame, hPacketFieldId: Long): String = {
+    // Estrai tutte le righe come sequenza di mappe
+    val rows = df.collect().map(row => {
+      val output = row.getAs[Double]("output")
+      Map("grouping" -> Map.empty[Double, String], "output" -> output)
+    })
+
+    // Crea un oggetto JSON con tutte le righe
+    implicit val formats = Serialization.formats(NoTypeHints)
+    Serialization.write(Map("results" -> rows))
   }
 
   def main(args: Array[String]) = {
@@ -233,6 +258,9 @@ object GlobalScalarMaximum {
       // TODO - framework issue: here user job ends. Invoke framework function to save data
       .withColumn("timestamp", current_timestamp().cast("long"))                     // add timestamp
 
+    // Retrieve timestamp
+    val timestampValue = output.select("timestamp").first().getLong(0)
+
     // write output to HBase
     val conf = HBaseConfiguration.create()
     conf.set("hbase.rootdir", root.hbaseRootdir.string.getOption(hadoopConfig).get)
@@ -250,18 +278,16 @@ object GlobalScalarMaximum {
     val table = TableName.valueOf(tableName)
     val hBaseTable = conn.getTable(table)
 
-    output.collect().foreach(row => {
-      val keyValue = projectId + "_" + hProjectAlgorithmName + "_" + (Long.MaxValue - row(1).asInstanceOf[Long])
-      val transRec = new Put(Bytes.toBytes(keyValue))
-      val mean = row(0).asInstanceOf[Double]  // TODO - framework issue: cast depending on output field type
-      val columnFamily = "value"
-      val column = outputName
-      // TODO - framework issue: add as many columns as output fields
-      transRec.addColumn(Bytes.toBytes(columnFamily), Bytes.toBytes(column), Bytes.toBytes(mean.toString))
+    // Chiamata alla funzione per concatenare le righe del DataFrame in un unico oggetto JSON
+    val jsonData = concatenateRowsToJson(output, hPacketFieldId)
 
-      hBaseTable.put(transRec)
-    })
+    // Genera la chiave univoca per la riga
+    val rowKey = projectId + "_" + hProjectAlgorithmName + "_" + (Long.MaxValue - timestampValue.asInstanceOf[Long])
 
+    // Scrivi l'oggetto JSON in HBase
+    writeToHBase(rowKey, jsonData, hBaseTable)
+
+    // Chiudo connessione spark
     spark.stop()
   }
 
