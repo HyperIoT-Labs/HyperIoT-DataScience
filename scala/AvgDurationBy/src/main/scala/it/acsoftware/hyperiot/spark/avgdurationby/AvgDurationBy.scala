@@ -19,8 +19,7 @@ import org.json4s._
 import org.json4s.jackson.Serialization
 
 import java.time.Instant
-
-import org.apache.spark.sql.Row
+import org.apache.spark.sql.functions.monotonically_increasing_id
 
 object AvgDurationBy {
 
@@ -137,8 +136,8 @@ object AvgDurationBy {
     val outputName = root.output.each.name.string.getAll(jobConfig).headOption.get
 
     // Get the hpacketFieldId of startDate and endDate
-    //val startDateFieldId = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig).drop(1).headOption.get
-    //val endDateFIeldId = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig).drop(2).headOption.get
+    val startDateFieldId = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig).drop(1).headOption.get
+    val endDateFieldId = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig).drop(2).headOption.get
 
     // TODO - framework issue - as many paths as hpackets inside input configuration. After that, how many dataframes do we have? ...
     // TODO: ... one for each path or one containing all hpackets?
@@ -168,7 +167,22 @@ object AvgDurationBy {
     // Leggi i file Avro uno ad uno e crea i DataFrame corrispondenti
     val dfs: Seq[DataFrame] = avroFiles.map { file =>
       val df = spark.read.format("avro").load(file)
-      df.select(col("fields.assetId.value.member0").as("value").cast("string"), col("fields.startDate.value.member1").as("startDate"), col("fields.endDate.value.member1").as("endDate"))
+
+      df.transform { df =>
+        df.select(
+          explode(map_values(col("fields"))).as("hPacketField")
+        )
+        .filter(
+          col("hPacketField.id") === hPacketFieldId ||
+          col("hPacketField.id") === startDateFieldId ||
+          col("hPacketField.id") === endDateFieldId
+        )
+        .select(
+          when(col("hPacketField.id") === hPacketFieldId, col("hPacketField.value.member0")).as("value"),
+          when(col("hPacketField.id") === startDateFieldId, col("hPacketField.value.member1")).as("startDate"),
+          when(col("hPacketField.id") === endDateFieldId, col("hPacketField.value.member1")).as("endDate")
+        )
+      }
     }
 
     val schemas = dfs.map(_.schema)
@@ -179,11 +193,8 @@ object AvgDurationBy {
       missingColumns.foldLeft(df)((acc, colName) => acc.withColumn(colName, lit(null)))
     })
 
-    // Unisce i DataFrame in uno unico
+    // Merge dataframe
     val values: DataFrame = dfsWithUnifiedSchema.reduce(_.union(_))
-
-    // Mostra il risultato
-    values.show()
 
     /*
       Goal: get value of HPacketField.
@@ -239,19 +250,38 @@ object AvgDurationBy {
 
     */
 
+    // Split dataframe in each column
+    val valueDF = values.select(col("value").cast("string"))
+    val startDateDF = values.select(col("startDate"))
+    val endDateDF = values.select(col("endDate"))
+
+    // Remove null values
+    val nonNullValueDF = valueDF.na.drop()
+    val nonNullStartDateDF = startDateDF.na.drop()
+    val nonNullEndDateDF = endDateDF.na.drop()
+
+    // Add dummy index column
+    val df1WithIndex = nonNullValueDF.withColumn("index", monotonically_increasing_id())
+    val df2WithIndex = nonNullStartDateDF.withColumn("index", monotonically_increasing_id())
+    val df3WithIndex = nonNullEndDateDF.withColumn("index", monotonically_increasing_id())
+
+    // Merge dataframe using this fake index
+    val resultDF = df1WithIndex
+      .join(df2WithIndex, Seq("index"))
+      .join(df3WithIndex, Seq("index"))
+      .drop("index")  // after join, remove now useless column
+
     // Compute avg duration
-    val dfWithDuration = values.withColumn("duration", (col("endDate") - col("startDate")) / 60000) // Converte in minuti
+    val dfWithDuration = resultDF.withColumn("duration", (col("endDate") - col("startDate")) / 60000) // Converte in minuti
     val avgDurationByAssetId = dfWithDuration
       .groupBy("value")
       .agg(avg("duration").as("output"))
       .withColumn("timestamp", current_timestamp().cast("long"))
 
-    avgDurationByAssetId.show()
-
     // Retrieve timestamp
     val timestampValue = avgDurationByAssetId.select("timestamp").first().getLong(0)
 
-    // write output to HBase
+    // Write output to HBase
     val conf = HBaseConfiguration.create()
     conf.set("hbase.rootdir", root.hbaseRootdir.string.getOption(hadoopConfig).get)
     conf.set("hbase.master.port", root.hbaseMasterPort.string.getOption(hadoopConfig).get)
@@ -268,16 +298,16 @@ object AvgDurationBy {
     val table = TableName.valueOf(tableName)
     val hBaseTable = conn.getTable(table)
 
-    // Chiamata alla funzione per concatenare le righe del DataFrame in un unico oggetto JSON
+    // Create JSON file
     val jsonData = concatenateRowsToJson(avgDurationByAssetId, hPacketFieldId)
 
-    // Genera la chiave univoca per la riga
+    // Make key for HBaseTable
     val rowKey = projectId + "_" + hProjectAlgorithmName + "_" + (Long.MaxValue - timestampValue.asInstanceOf[Long])
 
-    // Scrivi l'oggetto JSON in HBase
+    // Write on HBase
     writeToHBase(rowKey, jsonData, hBaseTable)
 
-    // Chiudo connessione spark
+    // Close spark connection
     spark.stop()
   }
 
