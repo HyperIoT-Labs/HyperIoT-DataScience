@@ -11,6 +11,7 @@ The statistics available at the moment are:
  - Global Scalar MAXIMUM (v 1.0.5)
  - Global Scalar MINIMUM (v 1.0.5)
  - CountBy (v 1.0.0)
+ - AvgDurationBy (work in progress)
 
 Versions of technologies used in the process:
  
