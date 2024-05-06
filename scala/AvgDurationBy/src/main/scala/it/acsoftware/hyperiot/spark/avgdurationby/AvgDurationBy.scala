@@ -166,22 +166,30 @@ object AvgDurationBy {
 
     // Leggi i file Avro uno ad uno e crea i DataFrame corrispondenti
     val dfs: Seq[DataFrame] = avroFiles.map { file =>
-      val df = spark.read.format("avro").load(file)
 
-      df.transform { df =>
-        df.select(
-          explode(map_values(col("fields"))).as("hPacketField")
-        )
-        .filter(
-          col("hPacketField.id") === hPacketFieldId ||
-          col("hPacketField.id") === startDateFieldId ||
-          col("hPacketField.id") === endDateFieldId
-        )
-        .select(
-          when(col("hPacketField.id") === hPacketFieldId, col("hPacketField.value.member0")).as("value"),
-          when(col("hPacketField.id") === startDateFieldId, col("hPacketField.value.member1")).as("startDate"),
-          when(col("hPacketField.id") === endDateFieldId, col("hPacketField.value.member1")).as("endDate")
-        )
+      try {
+          val df = spark.read.format("avro").load(file)
+
+          df.transform { df =>
+            df.select(
+              explode(map_values(col("fields"))).as("hPacketField")
+            )
+            .filter(
+              col("hPacketField.id") === hPacketFieldId ||
+              col("hPacketField.id") === startDateFieldId ||
+              col("hPacketField.id") === endDateFieldId
+            )
+            .select(
+              when(col("hPacketField.id") === hPacketFieldId, col("hPacketField.value.member0")).as("value"),
+              when(col("hPacketField.id") === startDateFieldId, col("hPacketField.value.member1")).as("startDate"),
+              when(col("hPacketField.id") === endDateFieldId, col("hPacketField.value.member1")).as("endDate")
+            )
+          }
+
+      } catch {
+            case ex: Throwable => 
+              println("Exception: " + ex.getMessage)
+              spark.emptyDataFrame // Ritorna un DataFrame vuoto in caso di eccezione
       }
     }
 

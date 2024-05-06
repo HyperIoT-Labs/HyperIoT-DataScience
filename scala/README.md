@@ -10,8 +10,8 @@ The statistics available at the moment are:
  - Global Scalar STANDARD DEVIATION (v 1.0.5)
  - Global Scalar MAXIMUM (v 1.0.5)
  - Global Scalar MINIMUM (v 1.0.5)
- - CountBy (v 1.0.0)
- - AvgDurationBy (v 1.0.0)
+ - CountBy (v 1.0.1)
+ - AvgDurationBy (v 1.0.1)
 
 Versions of technologies used in the process:
  
