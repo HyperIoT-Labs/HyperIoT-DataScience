@@ -180,7 +180,13 @@ object AvgDurationBy {
               col("hPacketField.id") === endDateFieldId
             )
             .select(
-              when(col("hPacketField.id") === hPacketFieldId, col("hPacketField.value.member0")).as("value"),
+              when(col("hPacketField.id") === hPacketFieldId, coalesce(                                                                             // coalesce
+                col("hPacketField.value.member0").cast("string"), 
+                col("hPacketField.value.member1").cast("string"),
+                col("hPacketField.value.member2").cast("string"), 
+                col("hPacketField.value.member3").cast("string"),
+                col("hPacketField.value.member4").cast("string"), 
+                col("hPacketField.value.member5").cast("string"))).as("value"),
               when(col("hPacketField.id") === startDateFieldId, col("hPacketField.value.member1")).as("startDate"),
               when(col("hPacketField.id") === endDateFieldId, col("hPacketField.value.member1")).as("endDate")
             )
