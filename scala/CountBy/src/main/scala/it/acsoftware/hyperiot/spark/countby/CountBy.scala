@@ -14,15 +14,13 @@ import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.types._
 import scala.collection.mutable.ArrayBuffer
-
 import org.json4s._
 import org.json4s.jackson.Serialization
-
 import java.time.Instant
 
 object CountBy {
 
-  // Funzione ricorsiva per cercare tutte le cartelle nel percorso specificato
+  // Recursive method to find all the subfolder of the given PATH
   def getFolders(fs: FileSystem, path: Path): Seq[String] = {
     val statuses = fs.listStatus(path)
     val folders = statuses.filter(_.isDirectory).map(_.getPath.toString)
@@ -30,20 +28,24 @@ object CountBy {
     folders ++ subFolders
   }
 
-  // Funzione per scrivere l'oggetto in HBase
+  // Method to write JSON object into HBase
   def writeToHBase(rowKey: String, value: String, hBaseTable: org.apache.hadoop.hbase.client.Table): Unit = {
     val put = new Put(Bytes.toBytes(rowKey))
     put.addColumn(Bytes.toBytes("value"), Bytes.toBytes("output"), Bytes.toBytes(value))
     hBaseTable.put(put)
   }
 
-  // Funzione per concatenare le righe del DataFrame in un unico oggetto JSON
-  def concatenateRowsToJson(df: DataFrame, hPacketFieldId: Long): String = {
-    // Estrai tutte le righe come sequenza di mappe
+  // Method used to concatenate rows of dataFrame into unique JSON object
+  def concatenateRowsToJson(df: DataFrame, hPacketFieldIds: Array[Long]): String = {
+    
     val rows = df.collect().map(row => {
-      val groupingValue  = row.getAs[String]("value")
+      // Estrai i valori per ciascun ID dall'array
+      val groupingValues = hPacketFieldIds.map(id => {
+        val value = row.getAs[String](id.toString)
+        (id -> value)
+      }).toMap
       val output = row.getAs[Long]("output")
-      Map("grouping" -> Map(hPacketFieldId -> groupingValue), "output" -> output)
+      Map("grouping" -> groupingValues, "output" -> output)
     })
 
     // Crea un oggetto JSON con tutte le righe
@@ -120,16 +122,22 @@ object CountBy {
       Doing so, you are sure values such as hPacketId and hPacketFieldId exist
     */
 
+    // Extract the array ids which have to be grouped
+    val hPacketFieldIds: List[Long] = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig)
+
     // get first HPacket ID
     val hPacketId = root.input.each.packetId.long.getAll(jobConfig).headOption.get
+
     // get first HPacketField ID
-    val hPacketFieldId = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig).headOption.get
+    //val hPacketFieldId = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig).headOption.get
+
     // get first HPacketField type
-    var hPacketFieldType =
-      root.input.each.mappedInputList.each.algorithmInput.fieldType.string.getAll(jobConfig).headOption.get.toLowerCase()
+    //var hPacketFieldType =
+    //  root.input.each.mappedInputList.each.algorithmInput.fieldType.string.getAll(jobConfig).headOption.get.toLowerCase()
     // one of input type can be "number". However, SparkSQL cannot cast to number, but it does to decimal
-    hPacketFieldType = if (hPacketFieldType == "number") "decimal" else hPacketFieldType
-    // get first output name
+    //hPacketFieldType = if (hPacketFieldType == "number") "decimal" else hPacketFieldType
+    
+    // get the output name
     val outputName = root.output.each.name.string.getAll(jobConfig).headOption.get
 
     // TODO - framework issue - as many paths as hpackets inside input configuration. After that, how many dataframes do we have? ...
@@ -163,16 +171,17 @@ object CountBy {
       try {
           val df = spark.read.format("avro").load(file)
 
-          df.select(explode(map_values(col("fields"))).as("hPacketField"))    // explode HPacketFields and rename column
-          .filter(col("hPacketField.id") === hPacketFieldId)                      // get target HPacketFields // todo - framework issue: === must be something like IN(hPacketFieldIds)
-          .select(                                                                         // get values
-            col("hPacketField.value.member0"),
-            col("hPacketField.value.member1"),
-            col("hPacketField.value.member2"),
-            col("hPacketField.value.member3"),
-            col("hPacketField.value.member4"),
-            col("hPacketField.value.member5")
-          )
+          df.select(explode(map_values(col("fields"))).as("hPacketField"))  
+          .filter(col("hPacketField.id").isin(hPacketFieldIds:_*))                      // get target HPacketFields // todo - framework issue: === must be something like IN(hPacketFieldIds)
+          .groupBy().pivot("hPacketField.id").agg(first(  
+                coalesce(                                                                             // coalesce
+                col("hPacketField.value.member0").cast("string"), 
+                col("hPacketField.value.member1").cast("string"),
+                col("hPacketField.value.member2").cast("string"), 
+                col("hPacketField.value.member3").cast("string"),
+                col("hPacketField.value.member4").cast("string"), 
+                col("hPacketField.value.member5").cast("string")))
+              )
       } catch {
             case ex: Throwable => 
               println("Exception: " + ex.getMessage)
@@ -192,6 +201,31 @@ object CountBy {
     val values: DataFrame = dfsWithUnifiedSchema.reduce(_.union(_))
 
     /*
+      NEW STRUCTURE -> the name of the column are the ID OF THE FIELD, with every value
+      +------------------+------------------+
+      |               258|               259|
+      +------------------+------------------+
+      |17.065334266630934|24.387431486170836|
+      | 17.49115885108567| 20.61515043824036|
+      |17.548476059520798|22.074255567795834|
+      | 17.25160723622318|20.249845335735195|
+      |17.574048740041682| 23.78246424723059|
+      | 16.16587997987633|21.722289461745277|
+      |17.402357500018496|23.120702018829107|
+      |17.716385295900697| 20.52234361849609|
+      |17.026509669271334|21.275516666433745|
+      |16.220651528462085|21.743694535667622|
+      | 17.03040295399606|  21.1043929342866|
+      |17.811436267536784| 21.35966792297221|
+      |17.963167367456514|22.233382185749427|
+      |16.680287535392093| 22.70999556169612|
+      |16.628682242312884| 24.15958051612948|
+      | 16.09687925614665| 24.29914295424012|
+      |16.215968523546593| 23.93743502206239|
+      |17.189700655002948|21.382208155103687|
+      |16.105960813121243|20.703543454967217|
+      |16.865080230870337|22.698428846737595|
+      +------------------+------------------+
       Goal: get value of HPacketField.
       Why? HPacketField has value with a type among the following ones: INTEGER, LONG, FLOAT,
       DOUBLE, BOOLEAN, STRING. In avro, we reach this via union type, which SparkSQL decode as struct.
@@ -246,16 +280,13 @@ object CountBy {
     */
 
     val output = values
-      .select(coalesce(
-        col("member0").cast("string"), col("member1").cast("string"),
-        col("member2").cast("string"), col("member3").cast("string"),
-        col("member4").cast("string"),
-        col("member5").cast("string")
-      ).as("value"))
-      .groupBy("value")
+      .groupBy(hPacketFieldIds.map(id => col(id.toString)): _*)
       .count()
       .withColumnRenamed("count", outputName)
       .withColumn("timestamp", current_timestamp().cast("long"))
+
+    println("Result:")
+    output.show()
 
     // Retrieve timestamp
     val timestampValue = output.select("timestamp").first().getLong(0)
@@ -278,7 +309,7 @@ object CountBy {
     val hBaseTable = conn.getTable(table)
 
     // Chiamata alla funzione per concatenare le righe del DataFrame in un unico oggetto JSON
-    val jsonData = concatenateRowsToJson(output, hPacketFieldId)
+    val jsonData = concatenateRowsToJson(output, hPacketFieldIds.toArray)
 
     // Genera la chiave univoca per la riga
     val rowKey = projectId + "_" + hProjectAlgorithmName + "_" + (Long.MaxValue - timestampValue.asInstanceOf[Long])
