@@ -4,14 +4,14 @@ The statistics algorithms are written in Scala and run using Apache Spark. Befor
     sbt clean
     sbt assembly
 
-The statistics available at the moment are:
+The statistics available at the moment are (LTS version):
 
  - Global Scalar MEAN (v 1.0.5)
  - Global Scalar STANDARD DEVIATION (v 1.0.5)
  - Global Scalar MAXIMUM (v 1.0.5)
  - Global Scalar MINIMUM (v 1.0.5)
- - CountBy (v 1.0.1)
- - AvgDurationBy (v 1.0.1)
+ - CountBy (v 1.0.2)
+ - AvgDurationBy (v 1.0.3)
 
 Versions of technologies used in the process:
  

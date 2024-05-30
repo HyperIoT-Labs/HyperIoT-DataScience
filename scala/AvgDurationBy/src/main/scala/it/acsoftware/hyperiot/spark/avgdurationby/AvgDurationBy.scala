@@ -38,13 +38,17 @@ object AvgDurationBy {
     hBaseTable.put(put)
   }
 
-  // Funzione per concatenare le righe del DataFrame in un unico oggetto JSON
-  def concatenateRowsToJson(df: DataFrame, hPacketFieldId: Long): String = {
-    // Estrai tutte le righe come sequenza di mappe
+  // Method used to concatenate rows of dataFrame into unique JSON object
+  def concatenateRowsToJson(df: DataFrame, hPacketFieldIds: Array[Long]): String = {
+    
     val rows = df.collect().map(row => {
-      val groupingValue  = row.getAs[String]("value")
+      // Estrai i valori per ciascun ID dall'array
+      val groupingValues = hPacketFieldIds.map(id => {
+        val value = row.getAs[String](id.toString)
+        (id -> value)
+      }).toMap
       val output = row.getAs[Double]("output")
-      Map("grouping" -> Map(hPacketFieldId -> groupingValue), "output" -> output)
+      Map("grouping" -> groupingValues, "output" -> output)
     })
 
     // Crea un oggetto JSON con tutte le righe
@@ -124,20 +128,26 @@ object AvgDurationBy {
     // get first HPacket ID
     val hPacketId = root.input.each.packetId.long.getAll(jobConfig).headOption.get
 
-    // get first HPacketField ID (the one who groups)
-    val hPacketFieldId = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig).headOption.get
+    // Extract the array ids which have to be grouped
+    val hPacketFieldIds: List[Long] = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig)
+
+    // Get the ID for START DATE and END DATE
+    val len = hPacketFieldIds.length
+    val startDateId = hPacketFieldIds(len - 2)
+    val endDateId = hPacketFieldIds(len - 1)
 
     // get first HPacketField type
-    var hPacketFieldType =
-      root.input.each.mappedInputList.each.algorithmInput.fieldType.string.getAll(jobConfig).headOption.get.toLowerCase()
+    //var hPacketFieldType =
+    //  root.input.each.mappedInputList.each.algorithmInput.fieldType.string.getAll(jobConfig).headOption.get.toLowerCase()
     // one of input type can be "number". However, SparkSQL cannot cast to number, but it does to decimal
-    hPacketFieldType = if (hPacketFieldType == "number") "decimal" else hPacketFieldType
+    //hPacketFieldType = if (hPacketFieldType == "number") "decimal" else hPacketFieldType
     // get first output name
+    
     val outputName = root.output.each.name.string.getAll(jobConfig).headOption.get
 
     // Get the hpacketFieldId of startDate and endDate
-    val startDateFieldId = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig).drop(1).headOption.get
-    val endDateFieldId = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig).drop(2).headOption.get
+    //val startDateFieldId = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig).drop(1).headOption.get
+    //val endDateFieldId = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig).drop(2).headOption.get
 
     // TODO - framework issue - as many paths as hpackets inside input configuration. After that, how many dataframes do we have? ...
     // TODO: ... one for each path or one containing all hpackets?
@@ -170,28 +180,17 @@ object AvgDurationBy {
       try {
           val df = spark.read.format("avro").load(file)
 
-          df.transform { df =>
-            df.select(
-              explode(map_values(col("fields"))).as("hPacketField")
-            )
-            .filter(
-              col("hPacketField.id") === hPacketFieldId ||
-              col("hPacketField.id") === startDateFieldId ||
-              col("hPacketField.id") === endDateFieldId
-            )
-            .select(
-              when(col("hPacketField.id") === hPacketFieldId, coalesce(                                                                             // coalesce
+          df.select(explode(map_values(col("fields"))).as("hPacketField"))  
+          .filter(col("hPacketField.id").isin(hPacketFieldIds:_*))                      // get target HPacketFields // todo - framework issue: === must be something like IN(hPacketFieldIds)
+          .groupBy().pivot("hPacketField.id").agg(first(  
+                coalesce(                                                                             // coalesce
                 col("hPacketField.value.member0").cast("string"), 
                 col("hPacketField.value.member1").cast("string"),
                 col("hPacketField.value.member2").cast("string"), 
                 col("hPacketField.value.member3").cast("string"),
                 col("hPacketField.value.member4").cast("string"), 
-                col("hPacketField.value.member5").cast("string"))).as("value"),
-              when(col("hPacketField.id") === startDateFieldId, col("hPacketField.value.member1")).as("startDate"),
-              when(col("hPacketField.id") === endDateFieldId, col("hPacketField.value.member1")).as("endDate")
-            )
-          }
-
+                col("hPacketField.value.member5").cast("string")))
+              )
       } catch {
             case ex: Throwable => 
               println("Exception: " + ex.getMessage)
@@ -211,6 +210,22 @@ object AvgDurationBy {
     val values: DataFrame = dfsWithUnifiedSchema.reduce(_.union(_))
 
     /*
+
+      Example of final output:
+      +----+-------------------+----------+
+      |6445|             output| timestamp|
+      +----+-------------------+----------+
+      |null|               null|1717073415|
+      |   1|                0.0|1717073415|
+      |   0|            0.05615|1717073415|
+      |  47| 0.4509111111111111|1717073415|
+      |  21| 0.6469833333333334|1717073415|
+      | 115|0.10987222222222222|1717073415|
+      |  95| 1.6050666666666666|1717073415|
+      |  20| 0.4017833333333333|1717073415|
+      | 116|0.28926666666666667|1717073415|
+      +----+-------------------+----------+
+
       Goal: get value of HPacketField.
       Why? HPacketField has value with a type among the following ones: INTEGER, LONG, FLOAT,
       DOUBLE, BOOLEAN, STRING. In avro, we reach this via union type, which SparkSQL decode as struct.
@@ -264,31 +279,19 @@ object AvgDurationBy {
 
     */
 
-    // Split dataframe in each column
-    val valueDF = values.select(col("value").cast("string"))
-    val startDateDF = values.select(col("startDate"))
-    val endDateDF = values.select(col("endDate"))
-
-    // Remove null values
-    val nonNullValueDF = valueDF.na.drop()
-    val nonNullStartDateDF = startDateDF.na.drop()
-    val nonNullEndDateDF = endDateDF.na.drop()
-
-    // Add dummy index column
-    val df1WithIndex = nonNullValueDF.withColumn("index", monotonically_increasing_id())
-    val df2WithIndex = nonNullStartDateDF.withColumn("index", monotonically_increasing_id())
-    val df3WithIndex = nonNullEndDateDF.withColumn("index", monotonically_increasing_id())
-
-    // Merge dataframe using this fake index
-    val resultDF = df1WithIndex
-      .join(df2WithIndex, Seq("index"))
-      .join(df3WithIndex, Seq("index"))
-      .drop("index")  // after join, remove now useless column
+    // Rename startDate and EndDate column
+    val resultDF = values.withColumnRenamed(startDateId.toString, "startDate")
+          .withColumnRenamed(endDateId.toString, "endDate")
 
     // Compute avg duration
     val dfWithDuration = resultDF.withColumn("duration", (col("endDate") - col("startDate")) / 60000) // Converte in minuti
+    
+    // Adjust GroupByArray
+    val groupByArray = hPacketFieldIds.dropRight(2)
+
+    // Compute aggregate/grouped statistics
     val avgDurationByAssetId = dfWithDuration
-      .groupBy("value")
+      .groupBy(groupByArray.map(id => col(id.toString)): _*)
       .agg(avg("duration").as("output"))
       .withColumn("timestamp", current_timestamp().cast("long"))
 
@@ -313,7 +316,7 @@ object AvgDurationBy {
     val hBaseTable = conn.getTable(table)
 
     // Create JSON file
-    val jsonData = concatenateRowsToJson(avgDurationByAssetId, hPacketFieldId)
+    val jsonData = concatenateRowsToJson(avgDurationByAssetId, groupByArray.toArray)
 
     // Make key for HBaseTable
     val rowKey = projectId + "_" + hProjectAlgorithmName + "_" + (Long.MaxValue - timestampValue.asInstanceOf[Long])
