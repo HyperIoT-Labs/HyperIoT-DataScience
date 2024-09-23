@@ -11,7 +11,7 @@ The statistics available at the moment are (LTS version):
  - Global Scalar MAXIMUM (v 1.0.5)
  - Global Scalar MINIMUM (v 1.0.5)
  - CountBy (v 1.0.2)
- - AvgDurationBy (v 1.0.3)
+ - AvgDurationBy (v 1.0.4)
 
 Versions of technologies used in the process:
  

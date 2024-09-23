@@ -116,22 +116,18 @@ object AvgDurationBy {
     val hdfsBasePath = fsDefaultFs + hdfsWriteDir
 
     /**
-     * This variable contains job configuration
+     * This variable contains job configuration (input, groupBy, output)
      */
     val jobConfig: Json = parse(args(4)).getOrElse(Json.Null)
 
-    /*
-     TODO framework issue - Validate jobConfig (i.e. it has one input and one output at least, and so on).
-      Doing so, you are sure values such as hPacketId and hPacketFieldId exist
-    */
-
-    // get first HPacket ID
+    // get the HPacket Id
     val hPacketId = root.input.each.packetId.long.getAll(jobConfig).headOption.get
 
-    // Extract the array ids which have to be grouped
+    // Extract the INPUT ID array and the GROUPBY array
     val hPacketFieldIds: List[Long] = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig)
+    val groupByIds: List[Long] = root.input.each.groupBy.each.id.long.getAll(jobConfig)
 
-    // Get the ID for START DATE and END DATE
+    // Get the ID for START DATE and END DATE (Only for duration)
     val len = hPacketFieldIds.length
     val startDateId = hPacketFieldIds(len - 2)
     val endDateId = hPacketFieldIds(len - 1)
@@ -181,7 +177,7 @@ object AvgDurationBy {
           val df = spark.read.format("avro").load(file)
 
           df.select(explode(map_values(col("fields"))).as("hPacketField"))  
-          .filter(col("hPacketField.id").isin(hPacketFieldIds:_*))                      // get target HPacketFields // todo - framework issue: === must be something like IN(hPacketFieldIds)
+          .filter(col("hPacketField.id").isin(hPacketFieldIds:_*) || col("hPacketField.id").isin(groupByIds: _*))                      // get target HPacketFields // todo - framework issue: === must be something like IN(hPacketFieldIds)
           .groupBy().pivot("hPacketField.id").agg(first(  
                 coalesce(                                                                             // coalesce
                 col("hPacketField.value.member0").cast("string"), 
@@ -286,12 +282,10 @@ object AvgDurationBy {
     // Compute avg duration
     val dfWithDuration = resultDF.withColumn("duration", (col("endDate") - col("startDate")) / 60000) // Converte in minuti
     
-    // Adjust GroupByArray
-    val groupByArray = hPacketFieldIds.dropRight(2)
 
     // Compute aggregate/grouped statistics
     val avgDurationByAssetId = dfWithDuration
-      .groupBy(groupByArray.map(id => col(id.toString)): _*)
+      .groupBy(groupByIds.map(id => col(id.toString)): _*)
       .agg(avg("duration").as("output"))
       .withColumn("timestamp", current_timestamp().cast("long"))
 
@@ -316,7 +310,7 @@ object AvgDurationBy {
     val hBaseTable = conn.getTable(table)
 
     // Create JSON file
-    val jsonData = concatenateRowsToJson(avgDurationByAssetId, groupByArray.toArray)
+    val jsonData = concatenateRowsToJson(avgDurationByAssetId, groupByIds.toArray)
 
     // Make key for HBaseTable
     val rowKey = projectId + "_" + hProjectAlgorithmName + "_" + (Long.MaxValue - timestampValue.asInstanceOf[Long])
