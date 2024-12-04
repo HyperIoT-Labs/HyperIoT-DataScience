@@ -1,6 +1,6 @@
 name := "GlobalScalarMean"
 
-version := "1.0.5"
+version := "1.0.4"
 
 scalaVersion := "2.12.17"
 

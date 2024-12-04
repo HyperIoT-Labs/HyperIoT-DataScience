@@ -279,43 +279,56 @@ object CountBy {
 
     */
 
-    val output = values
-      .groupBy(hPacketFieldIds.map(id => col(id.toString)): _*)
-      .count()
-      .withColumnRenamed("count", outputName)
-      .withColumn("timestamp", current_timestamp().cast("long"))
+    // Log
+    println("Values:")
+    values.show()
+    values.printSchema()
+    val rowCount = values.count()
+    println(s"Number of rows: $rowCount")
 
-    println("Result:")
-    output.show()
+    // Check empty dataframe
+    if (values.columns.isEmpty) { println("Values dataframe is empty!") } 
+    // normal flow
+    else {
+    
+      val output = values
+        .groupBy(hPacketFieldIds.map(id => col(id.toString)): _*)
+        .count()
+        .withColumnRenamed("count", outputName)
+        .withColumn("timestamp", current_timestamp().cast("long"))
 
-    // Retrieve timestamp
-    val timestampValue = output.select("timestamp").first().getLong(0)
+      println("Result:")
+      output.show()
 
-    // write output to HBase
-    val conf = HBaseConfiguration.create()
-    conf.set("hbase.rootdir", root.hbaseRootdir.string.getOption(hadoopConfig).get)
-    conf.set("hbase.master.port", root.hbaseMasterPort.string.getOption(hadoopConfig).get)
-    conf.set("hbase.cluster.distributed", root.hbaseClusterDistributed.string.getOption(hadoopConfig).get)
-    conf.set("hbase.regionserver.info.port", root.hbaseRegionserverInfoPort.string.getOption(hadoopConfig).get)
-    conf.set("hbase.master.info.port", root.hbaseMasterInfoPort.string.getOption(hadoopConfig).get)
-    conf.set("hbase.zookeeper.quorum", root.hbaseZookeeperQuorum.string.getOption(hadoopConfig).get)
-    conf.set("hbase.master", root.hbaseMaster.string.getOption(hadoopConfig).get)
-    conf.set("hbase.regionserver.port", root.hbaseRegionserverPort.string.getOption(hadoopConfig).get)
-    conf.set("hbase.master.hostname", root.hbaseMasterHostname.string.getOption(hadoopConfig).get)
+      // Retrieve timestamp
+      val timestampValue = output.select("timestamp").first().getLong(0)
 
-    val conn = ConnectionFactory.createConnection(conf)
-    val tableName = "algorithm" + "_" + algorithmId
-    val table = TableName.valueOf(tableName)
-    val hBaseTable = conn.getTable(table)
+      // write output to HBase
+      val conf = HBaseConfiguration.create()
+      conf.set("hbase.rootdir", root.hbaseRootdir.string.getOption(hadoopConfig).get)
+      conf.set("hbase.master.port", root.hbaseMasterPort.string.getOption(hadoopConfig).get)
+      conf.set("hbase.cluster.distributed", root.hbaseClusterDistributed.string.getOption(hadoopConfig).get)
+      conf.set("hbase.regionserver.info.port", root.hbaseRegionserverInfoPort.string.getOption(hadoopConfig).get)
+      conf.set("hbase.master.info.port", root.hbaseMasterInfoPort.string.getOption(hadoopConfig).get)
+      conf.set("hbase.zookeeper.quorum", root.hbaseZookeeperQuorum.string.getOption(hadoopConfig).get)
+      conf.set("hbase.master", root.hbaseMaster.string.getOption(hadoopConfig).get)
+      conf.set("hbase.regionserver.port", root.hbaseRegionserverPort.string.getOption(hadoopConfig).get)
+      conf.set("hbase.master.hostname", root.hbaseMasterHostname.string.getOption(hadoopConfig).get)
 
-    // Chiamata alla funzione per concatenare le righe del DataFrame in un unico oggetto JSON
-    val jsonData = concatenateRowsToJson(output, hPacketFieldIds.toArray)
+      val conn = ConnectionFactory.createConnection(conf)
+      val tableName = "algorithm" + "_" + algorithmId
+      val table = TableName.valueOf(tableName)
+      val hBaseTable = conn.getTable(table)
 
-    // Genera la chiave univoca per la riga
-    val rowKey = projectId + "_" + hProjectAlgorithmName + "_" + (Long.MaxValue - timestampValue.asInstanceOf[Long])
+      // Chiamata alla funzione per concatenare le righe del DataFrame in un unico oggetto JSON
+      val jsonData = concatenateRowsToJson(output, hPacketFieldIds.toArray)
 
-    // Scrivi l'oggetto JSON in HBase
-    writeToHBase(rowKey, jsonData, hBaseTable)
+      // Genera la chiave univoca per la riga
+      val rowKey = projectId + "_" + hProjectAlgorithmName + "_" + (Long.MaxValue - timestampValue.asInstanceOf[Long])
+
+      // Scrivi l'oggetto JSON in HBase
+      writeToHBase(rowKey, jsonData, hBaseTable)
+    }
 
     // Chiudo connessione spark
     spark.stop()

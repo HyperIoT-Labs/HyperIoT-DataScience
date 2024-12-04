@@ -4,6 +4,9 @@
 # Ignora i file metals
 .metals/
 
+# Ignora scala build
+.scala-build/
+
 # Ignora i file vsCode
 .vscode/
 
