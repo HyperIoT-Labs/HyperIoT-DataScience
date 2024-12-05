@@ -23,7 +23,7 @@ import org.apache.spark.sql.functions.monotonically_increasing_id
 
 object AvgDurationBy {
 
-  // Funzione ricorsiva per cercare tutte le cartelle nel percorso specificato
+  // Recursive method to find all folder path
   def getFolders(fs: FileSystem, path: Path): Seq[String] = {
     val statuses = fs.listStatus(path)
     val folders = statuses.filter(_.isDirectory).map(_.getPath.toString)
@@ -31,7 +31,7 @@ object AvgDurationBy {
     folders ++ subFolders
   }
 
-  // Funzione per scrivere l'oggetto in HBase
+  // Method to write objects into HBase
   def writeToHBase(rowKey: String, value: String, hBaseTable: org.apache.hadoop.hbase.client.Table): Unit = {
     val put = new Put(Bytes.toBytes(rowKey))
     put.addColumn(Bytes.toBytes("value"), Bytes.toBytes("output"), Bytes.toBytes(value))
@@ -131,35 +131,22 @@ object AvgDurationBy {
     val len = hPacketFieldIds.length
     val startDateId = hPacketFieldIds(len - 2)
     val endDateId = hPacketFieldIds(len - 1)
-
-    // get first HPacketField type
-    //var hPacketFieldType =
-    //  root.input.each.mappedInputList.each.algorithmInput.fieldType.string.getAll(jobConfig).headOption.get.toLowerCase()
-    // one of input type can be "number". However, SparkSQL cannot cast to number, but it does to decimal
-    //hPacketFieldType = if (hPacketFieldType == "number") "decimal" else hPacketFieldType
-    // get first output name
     
     val outputName = root.output.each.name.string.getAll(jobConfig).headOption.get
 
-    // Get the hpacketFieldId of startDate and endDate
-    //val startDateFieldId = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig).drop(1).headOption.get
-    //val endDateFieldId = root.input.each.mappedInputList.each.packetFieldId.long.getAll(jobConfig).drop(2).headOption.get
-
-    // TODO - framework issue - as many paths as hpackets inside input configuration. After that, how many dataframes do we have? ...
-    // TODO: ... one for each path or one containing all hpackets?
     val path = hdfsBasePath + "/" + hPacketId //ALL FILES .AVRO
 
-    // Ottieni il FileSystem per il percorso HDFS
+    // Get HDFS Filestystem and path
     spark.sparkContext.hadoopConfiguration.set("fs.defaultFS", fsDefaultFs)
     val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)
 
-    // Ottieni la lista di tutte le cartelle nel percorso HDFS
+    // Get all folders inside HDFS path
     val allFolders = getFolders(fs, new Path(path))
 
-    // Crea un ArrayBuffer per memorizzare i percorsi di tutti i file Avro
+    // ArrayBuffer to save all path and all avro files
     val avroFilesBuffer = ArrayBuffer[String]()
 
-    // Per ogni sottocartella, ottieni la lista di file Avro e aggiungili all'ArrayBuffer
+    // For every sub-folder, get avro file list and add it to ArrayBuffer
     allFolders.foreach { folder =>
       val avroFiles = fs.listStatus(new Path(folder))
         .filter(_.getPath.getName.endsWith(".avro"))
@@ -167,10 +154,10 @@ object AvgDurationBy {
       avroFilesBuffer ++= avroFiles
     }
 
-    // Converti l'ArrayBuffer in una sequenza immutabile
+    // Convert ArrayBuffer into seq
     val avroFiles = avroFilesBuffer.toSeq
 
-    // Leggi i file Avro uno ad uno e crea i DataFrame corrispondenti
+    // Read avro file 1 by 1 and make relative DataFrame
     val dfs: Seq[DataFrame] = avroFiles.map { file =>
 
       try {
@@ -190,7 +177,7 @@ object AvgDurationBy {
       } catch {
             case ex: Throwable => 
               println("Exception: " + ex.getMessage)
-              spark.emptyDataFrame // Ritorna un DataFrame vuoto in caso di eccezione
+              spark.emptyDataFrame // Empty dataframe while exception
       }
     }
 
@@ -206,7 +193,6 @@ object AvgDurationBy {
     val values: DataFrame = dfsWithUnifiedSchema.reduce(_.union(_))
 
     /*
-
       Example of final output:
       +----+-------------------+----------+
       |6445|             output| timestamp|
@@ -221,58 +207,6 @@ object AvgDurationBy {
       |  20| 0.4017833333333333|1717073415|
       | 116|0.28926666666666667|1717073415|
       +----+-------------------+----------+
-
-      Goal: get value of HPacketField.
-      Why? HPacketField has value with a type among the following ones: INTEGER, LONG, FLOAT,
-      DOUBLE, BOOLEAN, STRING. In avro, we reach this via union type, which SparkSQL decode as struct.
-
-      root
-      |-- map_values(fields): array (nullable = true)
-      |    |-- element: struct (containsNull = true)
-      |    |    |-- name: string (nullable = true)
-      |    |    |-- description: string (nullable = true)
-      |    |    |-- type: string (nullable = true)
-      |    |    |-- multiplicity: string (nullable = true)
-      |    |    |-- packet: long (nullable = true)
-      |    |    |-- value: struct (nullable = true)
-      |    |    |    |-- member0: integer (nullable = true)
-      |    |    |    |-- member1: long (nullable = true)
-      |    |    |    |-- member2: float (nullable = true)
-      |    |    |    |-- member3: double (nullable = true)
-      |    |    |    |-- member4: boolean (nullable = true)
-      |    |    |    |-- member5: string (nullable = true)
-      |    |    |-- id: long (nullable = true)
-      |    |    |-- categoryIds: array (nullable = true)
-      |    |    |    |-- element: long (containsNull = true)
-      |    |    |-- tagIds: array (nullable = true)
-      |    |    |    |-- element: long (containsNull = true)
-
-      (It is the schema of fields property of HPacket)
-
-
-      This struct has keys with prefix "member", i.e. member0, member1, member2, member3, member4 and member5.
-      Each key has a value associated to it of a specific type ( , long, float, double, boolean, string).
-      One of these value is not equal to null at most. See the example:
-
-      SCALAR SCHEMA:
-      +------+-------+-------+-------+------------------+-------+-------+
-      |type  |member0|member1|member2|member3           |member4|member5|
-      +------+-------+-------+-------+------------------+-------+-------+
-      |DOUBLE|null   |null   |null   |43.59878036402215 |null   |null   |
-      |DOUBLE|null   |null   |null   |42.45798705747769 |null   |null   |
-      |DOUBLE|null   |null   |null   |44.908155679735856|null   |null   |
-      +------+-------+-------+-------+------------------+-------+-------+
-
-      During the lifecycle of HPacketField, its value type could be change. It is mapped to an input, which is chosen by
-      user while he configures the algorithm. This input must have its own type, to avoid different conversions
-      if algorithm exploits type inside HPacketField. For example: mean algorithm works on double types;
-      HPacketField had double type as original type, but after a while it changed to float. Input type of algorithm
-      configuration ensures that all values are double.
-
-      The proposal: apply coalesce to get the unique not null value.
-      Coalesce works on elements of the same type, cast them as string.
-      Get back the original type of selected value through the type of configuration input
-
     */
 
     // Rename startDate and EndDate column

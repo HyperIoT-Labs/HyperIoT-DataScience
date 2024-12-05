@@ -1,4 +1,4 @@
-# Statistics using Apache Spark v 1.0.1
+# Statistics using Apache Spark v 1.0.5
 The statistics algorithms are written in Scala and run using Apache Spark. Before being executed they must be built into a .jar file using these commands inside the repo:
 
     sbt clean
@@ -10,8 +10,8 @@ The statistics available at the moment are (LTS version):
  - Global Scalar STANDARD DEVIATION (v 1.0.5)
  - Global Scalar MAXIMUM (v 1.0.5)
  - Global Scalar MINIMUM (v 1.0.5)
- - CountBy (v 1.0.2)
- - AvgDurationBy (v 1.0.4)
+ - CountBy (v 1.0.5)
+ - AvgDurationBy (v 1.0.5)
 
 Versions of technologies used in the process:
  
