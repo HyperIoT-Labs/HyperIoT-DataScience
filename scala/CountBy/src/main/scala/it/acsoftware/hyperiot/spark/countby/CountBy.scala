@@ -169,19 +169,40 @@ object CountBy {
     val dfs: Seq[DataFrame] = avroFiles.map { file =>
 
       try {
-          val df = spark.read.format("avro").load(file)
 
-          df.select(explode(map_values(col("fields"))).as("hPacketField"))  
-          .filter(col("hPacketField.id").isin(hPacketFieldIds:_*))                      // get target HPacketFields // todo - framework issue: === must be something like IN(hPacketFieldIds)
-          .groupBy().pivot("hPacketField.id").agg(first(  
-                coalesce(                                                                             // coalesce
-                col("hPacketField.value.member0").cast("string"), 
-                col("hPacketField.value.member1").cast("string"),
-                col("hPacketField.value.member2").cast("string"), 
-                col("hPacketField.value.member3").cast("string"),
-                col("hPacketField.value.member4").cast("string"), 
-                col("hPacketField.value.member5").cast("string")))
-              )
+        val df = spark.read.format("avro").load(file)
+
+        val transformedDf = df.select(explode(map_values(col("fields"))).as("hPacketField"))
+          .filter(col("hPacketField.id").isin(hPacketFieldIds: _*))  // Filtra per gli ID
+          .select(
+            col("hPacketField.id"),
+            coalesce(
+              col("hPacketField.value.member0").cast("string"),
+              col("hPacketField.value.member1").cast("string"),
+              col("hPacketField.value.member2").cast("string"),
+              col("hPacketField.value.member3").cast("string"),
+              col("hPacketField.value.member4").cast("string"),
+              col("hPacketField.value.member5").cast("string")
+            ).as("value")
+          )
+
+        // Creazione dinamica delle colonne per ogni 'hPacketField.id'
+        var finalDf = transformedDf
+        hPacketFieldIds.foreach { id =>
+          finalDf = finalDf.withColumn(s"$id", when(col("id") === id, col("value")).otherwise(lit(null)))
+        }
+
+        // Seleziona solo le colonne che abbiamo creato dinamicamente (senza 'id' o altre colonne non necessarie)
+        val selectedCols = hPacketFieldIds.map(id => s"$id")
+
+        // Risultato finale: solo le colonne dinamiche
+        val resultDf = finalDf.select(selectedCols.head, selectedCols.tail: _*)
+
+        // Mostra il risultato
+        resultDf.show()
+
+        resultDf
+
       } catch {
             case ex: Throwable => 
               println("Exception: " + ex.getMessage)
@@ -199,6 +220,9 @@ object CountBy {
 
     // Unisce i DataFrame in uno unico
     val values: DataFrame = dfsWithUnifiedSchema.reduce(_.union(_))
+
+    println("VALUES pre-count")
+    values.show()
 
     /*
       NEW STRUCTURE -> the name of the column are the ID OF THE FIELD, with every value
@@ -285,7 +309,7 @@ object CountBy {
       .withColumnRenamed("count", outputName)
       .withColumn("timestamp", current_timestamp().cast("long"))
 
-    println("Result:")
+    println("RESULT")
     output.show()
 
     // Retrieve timestamp
