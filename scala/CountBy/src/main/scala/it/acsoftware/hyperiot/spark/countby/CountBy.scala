@@ -169,19 +169,40 @@ object CountBy {
     val dfs: Seq[DataFrame] = avroFiles.map { file =>
 
       try {
-          val df = spark.read.format("avro").load(file)
 
-          df.select(explode(map_values(col("fields"))).as("hPacketField"))  
-          .filter(col("hPacketField.id").isin(hPacketFieldIds:_*))                      // get target HPacketFields // todo - framework issue: === must be something like IN(hPacketFieldIds)
-          .groupBy().pivot("hPacketField.id").agg(first(  
-                coalesce(                                                                             // coalesce
-                col("hPacketField.value.member0").cast("string"), 
-                col("hPacketField.value.member1").cast("string"),
-                col("hPacketField.value.member2").cast("string"), 
-                col("hPacketField.value.member3").cast("string"),
-                col("hPacketField.value.member4").cast("string"), 
-                col("hPacketField.value.member5").cast("string")))
-              )
+        val df = spark.read.format("avro").load(file)
+
+        val transformedDf = df.select(explode(map_values(col("fields"))).as("hPacketField"))
+          .filter(col("hPacketField.id").isin(hPacketFieldIds: _*))  // Filtra per gli ID
+          .select(
+            col("hPacketField.id"),
+            coalesce(
+              col("hPacketField.value.member0").cast("string"),
+              col("hPacketField.value.member1").cast("string"),
+              col("hPacketField.value.member2").cast("string"),
+              col("hPacketField.value.member3").cast("string"),
+              col("hPacketField.value.member4").cast("string"),
+              col("hPacketField.value.member5").cast("string")
+            ).as("value")
+          )
+
+        // Creazione dinamica delle colonne per ogni 'hPacketField.id'
+        var finalDf = transformedDf
+        hPacketFieldIds.foreach { id =>
+          finalDf = finalDf.withColumn(s"$id", when(col("id") === id, col("value")).otherwise(lit(null)))
+        }
+
+        // Seleziona solo le colonne che abbiamo creato dinamicamente (senza 'id' o altre colonne non necessarie)
+        val selectedCols = hPacketFieldIds.map(id => s"$id")
+
+        // Risultato finale: solo le colonne dinamiche
+        val resultDf = finalDf.select(selectedCols.head, selectedCols.tail: _*)
+
+        // Mostra il risultato
+        resultDf.show()
+
+        resultDf
+
       } catch {
             case ex: Throwable => 
               println("Exception: " + ex.getMessage)
@@ -199,6 +220,9 @@ object CountBy {
 
     // Unisce i DataFrame in uno unico
     val values: DataFrame = dfsWithUnifiedSchema.reduce(_.union(_))
+
+    println("VALUES pre-count")
+    values.show()
 
     /*
       NEW STRUCTURE -> the name of the column are the ID OF THE FIELD, with every value
@@ -279,56 +303,43 @@ object CountBy {
 
     */
 
-    // Log
-    println("Values:")
-    values.show()
-    values.printSchema()
-    val rowCount = values.count()
-    println(s"Number of rows: $rowCount")
+    val output = values
+      .groupBy(hPacketFieldIds.map(id => col(id.toString)): _*)
+      .count()
+      .withColumnRenamed("count", outputName)
+      .withColumn("timestamp", current_timestamp().cast("long"))
 
-    // Check empty dataframe
-    if (values.columns.isEmpty) { println("Values dataframe is empty!") } 
-    // normal flow
-    else {
-    
-      val output = values
-        .groupBy(hPacketFieldIds.map(id => col(id.toString)): _*)
-        .count()
-        .withColumnRenamed("count", outputName)
-        .withColumn("timestamp", current_timestamp().cast("long"))
+    println("RESULT")
+    output.show()
 
-      println("Result:")
-      output.show()
+    // Retrieve timestamp
+    val timestampValue = output.select("timestamp").first().getLong(0)
 
-      // Retrieve timestamp
-      val timestampValue = output.select("timestamp").first().getLong(0)
+    // write output to HBase
+    val conf = HBaseConfiguration.create()
+    conf.set("hbase.rootdir", root.hbaseRootdir.string.getOption(hadoopConfig).get)
+    conf.set("hbase.master.port", root.hbaseMasterPort.string.getOption(hadoopConfig).get)
+    conf.set("hbase.cluster.distributed", root.hbaseClusterDistributed.string.getOption(hadoopConfig).get)
+    conf.set("hbase.regionserver.info.port", root.hbaseRegionserverInfoPort.string.getOption(hadoopConfig).get)
+    conf.set("hbase.master.info.port", root.hbaseMasterInfoPort.string.getOption(hadoopConfig).get)
+    conf.set("hbase.zookeeper.quorum", root.hbaseZookeeperQuorum.string.getOption(hadoopConfig).get)
+    conf.set("hbase.master", root.hbaseMaster.string.getOption(hadoopConfig).get)
+    conf.set("hbase.regionserver.port", root.hbaseRegionserverPort.string.getOption(hadoopConfig).get)
+    conf.set("hbase.master.hostname", root.hbaseMasterHostname.string.getOption(hadoopConfig).get)
 
-      // write output to HBase
-      val conf = HBaseConfiguration.create()
-      conf.set("hbase.rootdir", root.hbaseRootdir.string.getOption(hadoopConfig).get)
-      conf.set("hbase.master.port", root.hbaseMasterPort.string.getOption(hadoopConfig).get)
-      conf.set("hbase.cluster.distributed", root.hbaseClusterDistributed.string.getOption(hadoopConfig).get)
-      conf.set("hbase.regionserver.info.port", root.hbaseRegionserverInfoPort.string.getOption(hadoopConfig).get)
-      conf.set("hbase.master.info.port", root.hbaseMasterInfoPort.string.getOption(hadoopConfig).get)
-      conf.set("hbase.zookeeper.quorum", root.hbaseZookeeperQuorum.string.getOption(hadoopConfig).get)
-      conf.set("hbase.master", root.hbaseMaster.string.getOption(hadoopConfig).get)
-      conf.set("hbase.regionserver.port", root.hbaseRegionserverPort.string.getOption(hadoopConfig).get)
-      conf.set("hbase.master.hostname", root.hbaseMasterHostname.string.getOption(hadoopConfig).get)
+    val conn = ConnectionFactory.createConnection(conf)
+    val tableName = "algorithm" + "_" + algorithmId
+    val table = TableName.valueOf(tableName)
+    val hBaseTable = conn.getTable(table)
 
-      val conn = ConnectionFactory.createConnection(conf)
-      val tableName = "algorithm" + "_" + algorithmId
-      val table = TableName.valueOf(tableName)
-      val hBaseTable = conn.getTable(table)
+    // Chiamata alla funzione per concatenare le righe del DataFrame in un unico oggetto JSON
+    val jsonData = concatenateRowsToJson(output, hPacketFieldIds.toArray)
 
-      // Chiamata alla funzione per concatenare le righe del DataFrame in un unico oggetto JSON
-      val jsonData = concatenateRowsToJson(output, hPacketFieldIds.toArray)
+    // Genera la chiave univoca per la riga
+    val rowKey = projectId + "_" + hProjectAlgorithmName + "_" + (Long.MaxValue - timestampValue.asInstanceOf[Long])
 
-      // Genera la chiave univoca per la riga
-      val rowKey = projectId + "_" + hProjectAlgorithmName + "_" + (Long.MaxValue - timestampValue.asInstanceOf[Long])
-
-      // Scrivi l'oggetto JSON in HBase
-      writeToHBase(rowKey, jsonData, hBaseTable)
-    }
+    // Scrivi l'oggetto JSON in HBase
+    writeToHBase(rowKey, jsonData, hBaseTable)
 
     // Chiudo connessione spark
     spark.stop()
