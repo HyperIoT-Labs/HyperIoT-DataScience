@@ -17,6 +17,7 @@ scala/GlobalScalarMinimum/project/
 scala/GlobalScalarMaximum/project/
 scala/CountBy/project/
 scala/AvgDurationBy/project/
+scala/MonthlyHourReport/project/
 
 # Ignora tutti i file target
 scala/GlobalScalarMean/target/
@@ -25,3 +26,4 @@ scala/GlobalScalarMinimum/target/
 scala/GlobalScalarMaximum/target/
 scala/CountBy/target/
 scala/AvgDurationBy/target/
+scala/MonthlyHourReport/target/

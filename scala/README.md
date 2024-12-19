@@ -12,6 +12,7 @@ The statistics available at the moment are (LTS version):
  - Global Scalar MINIMUM (v 1.0.4)
  - CountBy (v 1.0.4)
  - AvgDurationBy (v 1.0.4)
+ - MonthlyHourReport (v 1.0.0)
 
 Versions of technologies used in the process:
  
