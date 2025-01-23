@@ -10,7 +10,7 @@ import org.apache.hadoop.hbase.util.Bytes
 import org.apache.hadoop.hbase.{HBaseConfiguration, TableName}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
-import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.hadoop.fs.{FileSystem, Path, FileStatus}
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.expressions.Window
@@ -20,6 +20,7 @@ import org.json4s.jackson.Serialization
 import java.time.Instant
 import java.time.Month
 import java.util.Locale
+import java.text.SimpleDateFormat
 
 object MonthlyHourReport {
 
@@ -53,6 +54,12 @@ object MonthlyHourReport {
     Serialization.write(Map("results" -> rows))
   }
 
+    def isFileEmpty(fs: FileSystem, filePath: Path): Boolean = {
+    // Ottieni informazioni sul file
+    val fileStatus = fs.getFileStatus(filePath)
+    // Verifica se la dimensione del file è zero
+    fileStatus.getLen == 0
+  }
 
   def main(args: Array[String]) = {
 
@@ -88,8 +95,9 @@ object MonthlyHourReport {
         "--illegal-access=permit --add-opens=java.base/sun.security.action=ALL-UNNAMED " +
         "--illegal-access=permit --add-opens=java.base/sun.util.calendar=ALL-UNNAMED " +
         "--illegal-access=permit --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED")
-      .appName( "CountBy")
-      .getOrCreate()
+        .config("spark.sql.files.ignoreCorruptFiles", "true")
+        .appName( "Monthly_CutOff")
+        .getOrCreate()
 
     /**
      * Project ID
@@ -132,64 +140,86 @@ object MonthlyHourReport {
     // get the output name
     val outputName = root.output.each.name.string.getAll(jobConfig).headOption.get
 
-    // all .avro files
-    val path = hdfsBasePath + "/" + hPacketId
+    // all .avro files (2024 and 2025)
+    val y1 = "2024"
+    val y2 = "2025"
+    val path = hdfsBasePath + "/" + hPacketId + "/" + y1
+    val path2 = hdfsBasePath + "/" + hPacketId + "/" + y2
 
     // Ottieni il FileSystem per il percorso HDFS
     spark.sparkContext.hadoopConfiguration.set("fs.defaultFS", fsDefaultFs)
     val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)
 
-    // Ottieni la lista di tutte le cartelle nel percorso HDFS
-    val allFolders = getFolders(fs, new Path(path))
+    val cutoffDate = "2024-07-22 8:40:00"
+    val dateFormat = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+    val cutoffTimestamp = dateFormat.parse(cutoffDate).getTime
 
-    // Crea un ArrayBuffer per memorizzare i percorsi di tutti i file Avro
-    val avroFilesBuffer = ArrayBuffer[String]()
+    // Ottieni la lista di file nella directory
+    val filesStatus: Array[FileStatus] = fs.listStatus(new Path(path))
 
-    // Per ogni sottocartella, ottieni la lista di file Avro e aggiungili all'ArrayBuffer
-    allFolders.foreach { folder =>
-      val avroFiles = fs.listStatus(new Path(folder))
-        .filter(_.getPath.getName.endsWith(".avro"))
-        .map(_.getPath.toString)
-      avroFilesBuffer ++= avroFiles
-    }
+    // Dividi i file in base alla data di modifica
+    val (beforeCutoff, afterCutoff) = filesStatus.partition(file => {
+      file.getModificationTime < cutoffTimestamp
+    })
 
-    // Converti l'ArrayBuffer in una sequenza immutabile
-    val avroFiles = avroFilesBuffer.toSeq
+    // Estrai i percorsi dei file dalla lista beforeCutoff
+    val beforeCutoffPaths = beforeCutoff.map(_.getPath.toString)
+    val afterCutoffPaths = afterCutoff.map(_.getPath.toString)
 
-    // Leggi i file Avro uno ad uno e crea i DataFrame corrispondenti
-    val dfs: Seq[DataFrame] = avroFiles.map { file =>
+    // Schema vecchio
+    val schemaOld = """{"type":"struct","fields":[{"name":"name","type":"string","nullable":true,"metadata":{}},{"name":"type","type":"string","nullable":true,"metadata":{}},{"name":"format","type":"string","nullable":true,"metadata":{}},{"name":"serialization","type":"string","nullable":true,"metadata":{}},{"name":"device","type":"long","nullable":true,"metadata":{}},{"name":"version","type":"string","nullable":true,"metadata":{}},{"name":"fields","type":{"type":"map","keyType":"string","valueType":{"type":"struct","fields":[{"name":"name","type":"string","nullable":true,"metadata":{}},{"name":"description","type":"string","nullable":true,"metadata":{}},{"name":"type","type":"string","nullable":true,"metadata":{}},{"name":"multiplicity","type":"string","nullable":true,"metadata":{}},{"name":"packet","type":"long","nullable":true,"metadata":{}},{"name":"value","type":{"type":"struct","fields":[{"name":"member0","type":"integer","nullable":true,"metadata":{}},{"name":"member1","type":"long","nullable":true,"metadata":{}},{"name":"member2","type":"float","nullable":true,"metadata":{}},{"name":"member3","type":"double","nullable":true,"metadata":{}},{"name":"member4","type":"boolean","nullable":true,"metadata":{}},{"name":"member5","type":"string","nullable":true,"metadata":{}},{"name":"member6","type":{"type":"array","elementType":{"type":"struct","fields":[{"name":"member0","type":"integer","nullable":true,"metadata":{}},{"name":"member1","type":"long","nullable":true,"metadata":{}},{"name":"member2","type":"float","nullable":true,"metadata":{}},{"name":"member3","type":"double","nullable":true,"metadata":{}},{"name":"member4","type":"boolean","nullable":true,"metadata":{}},{"name":"member5","type":"string","nullable":true,"metadata":{}}]},"containsNull":true},"nullable":true,"metadata":{}}]},"nullable":true,"metadata":{}},{"name":"id","type":"long","nullable":true,"metadata":{}},{"name":"categoryIds","type":{"type":"array","elementType":"long","containsNull":true},"nullable":true,"metadata":{}},{"name":"tagIds","type":{"type":"array","elementType":"long","containsNull":true},"nullable":true,"metadata":{}}]},"valueContainsNull":true},"nullable":true,"metadata":{}},{"name":"valid","type":"boolean","nullable":true,"metadata":{}},{"name":"id","type":"long","nullable":true,"metadata":{}},{"name":"categoryIds","type":{"type":"array","elementType":"long","containsNull":true},"nullable":true,"metadata":{}},{"name":"tagIds","type":{"type":"array","elementType":"long","containsNull":true},"nullable":true,"metadata":{}},{"name":"timestampField","type":"string","nullable":true,"metadata":{}},{"name":"timestampFormat","type":"string","nullable":true,"metadata":{}},{"name":"trafficPlan","type":"string","nullable":true,"metadata":{}},{"name":"unixTimestamp","type":"boolean","nullable":true,"metadata":{}},{"name":"unixTimestampFormatSeconds","type":"boolean","nullable":true,"metadata":{}}]}"""
+    val schema1 = DataType.fromJson(schemaOld).asInstanceOf[StructType]
 
-      try {
+    // Leggi il file Avro come DataFrame
+    val df_old = spark.read.format("avro").schema(schema1).load(beforeCutoffPaths: _*)
 
-        val df = spark.read.format("avro").load(file)
-
-          val df_selected = df.select(
-            explode(map_values(col("fields"))).as("hPacketField")
-          )
+    val df_selected_1 = df_old.select(
+          explode(map_values(col("fields"))).as("hPacketField")
+        )
           .filter(
             col("hPacketField.id") === hPacketFieldId ||
-              col("hPacketField.id") === 0
+            col("hPacketField.id") === 0
           )
           .select(
-            when(col("hPacketField.id") === hPacketFieldId, coalesce( // coalesce
-              col("hPacketField.value.member0").cast("string"),
-              col("hPacketField.value.member1").cast("string"),
-              col("hPacketField.value.member2").cast("string"),
-              col("hPacketField.value.member3").cast("string"),
-              col("hPacketField.value.member4").cast("string"),
-              col("hPacketField.value.member5").cast("string"))).as("TC_H"),
+            when(col("hPacketField.id") === hPacketFieldId, col("hPacketField.value.member3").cast("string")).as("TC_H"),
             when(col("hPacketField.id") === 0, col("hPacketField.value.member1")).as("timestamp")
           )
 
-          df_selected
+    // Schema nuovo
+    val schemaNew = """{"type":"struct","fields":[{"name":"name","type":"string","nullable":true,"metadata":{}},{"name":"type","type":"string","nullable":true,"metadata":{}},{"name":"format","type":"string","nullable":true,"metadata":{}},{"name":"serialization","type":"string","nullable":true,"metadata":{}},{"name":"device","type":"long","nullable":true,"metadata":{}},{"name":"version","type":"string","nullable":true,"metadata":{}},{"name":"fields","type":{"type":"map","keyType":"string","valueType":{"type":"struct","fields":[{"name":"name","type":"string","nullable":true,"metadata":{}},{"name":"description","type":"string","nullable":true,"metadata":{}},{"name":"type","type":"string","nullable":true,"metadata":{}},{"name":"multiplicity","type":"string","nullable":true,"metadata":{}},{"name":"packet","type":"long","nullable":true,"metadata":{}},{"name":"value","type":{"type":"struct","fields":[{"name":"member0","type":"integer","nullable":true,"metadata":{}},{"name":"member1","type":"long","nullable":true,"metadata":{}},{"name":"member2","type":"float","nullable":true,"metadata":{}},{"name":"member3","type":"double","nullable":true,"metadata":{}},{"name":"member4","type":"boolean","nullable":true,"metadata":{}},{"name":"member5","type":"string","nullable":true,"metadata":{}},{"name":"member6","type":{"type":"array","elementType":{"type":"struct","fields":[{"name":"member0","type":"integer","nullable":true,"metadata":{}},{"name":"member1","type":"long","nullable":true,"metadata":{}},{"name":"member2","type":"float","nullable":true,"metadata":{}},{"name":"member3","type":"double","nullable":true,"metadata":{}},{"name":"member4","type":"boolean","nullable":true,"metadata":{}},{"name":"member5","type":"string","nullable":true,"metadata":{}},{"name":"member6","type":{"type":"array","elementType":{"type":"struct","fields":[{"name":"member0","type":"integer","nullable":true,"metadata":{}},{"name":"member1","type":"long","nullable":true,"metadata":{}},{"name":"member2","type":"float","nullable":true,"metadata":{}},{"name":"member3","type":"double","nullable":true,"metadata":{}},{"name":"member4","type":"boolean","nullable":true,"metadata":{}},{"name":"member5","type":"string","nullable":true,"metadata":{}},{"name":"member6","type":{"type":"array","elementType":{"type":"struct","fields":[{"name":"member0","type":"integer","nullable":true,"metadata":{}},{"name":"member1","type":"long","nullable":true,"metadata":{}},{"name":"member2","type":"float","nullable":true,"metadata":{}},{"name":"member3","type":"double","nullable":true,"metadata":{}},{"name":"member4","type":"boolean","nullable":true,"metadata":{}},{"name":"member5","type":"string","nullable":true,"metadata":{}}]},"containsNull":true},"nullable":true,"metadata":{}}]},"containsNull":true},"nullable":true,"metadata":{}}]},"containsNull":true},"nullable":true,"metadata":{}}]},"nullable":true,"metadata":{}},{"name":"id","type":"long","nullable":true,"metadata":{}},{"name":"categoryIds","type":{"type":"array","elementType":"long","containsNull":true},"nullable":true,"metadata":{}},{"name":"tagIds","type":{"type":"array","elementType":"long","containsNull":true},"nullable":true,"metadata":{}}]},"valueContainsNull":true},"nullable":true,"metadata":{}},{"name":"valid","type":"boolean","nullable":true,"metadata":{}},{"name":"id","type":"long","nullable":true,"metadata":{}},{"name":"categoryIds","type":{"type":"array","elementType":"long","containsNull":true},"nullable":true,"metadata":{}},{"name":"tagIds","type":{"type":"array","elementType":"long","containsNull":true},"nullable":true,"metadata":{}},{"name":"timestampField","type":"string","nullable":true,"metadata":{}},{"name":"timestampFormat","type":"string","nullable":true,"metadata":{}},{"name":"trafficPlan","type":"string","nullable":true,"metadata":{}},{"name":"unixTimestamp","type":"boolean","nullable":true,"metadata":{}},{"name":"unixTimestampFormatSeconds","type":"boolean","nullable":true,"metadata":{}}]}"""
+    val schema2 = DataType.fromJson(schemaNew).asInstanceOf[StructType]
 
-      } catch {
-            case ex: Throwable => 
-              println("Exception: " + ex.getMessage)
-              spark.emptyDataFrame // Ritorna un DataFrame vuoto in caso di eccezione
-      }
-    }
+    // Leggi il file Avro come DataFrame
+    val df_new = spark.read.format("avro").schema(schema2).load(afterCutoffPaths: _*)
 
+    val df_selected_2 = df_new.select(
+              explode(map_values(col("fields"))).as("hPacketField")
+            )
+              .filter(
+                col("hPacketField.id") === hPacketFieldId ||
+                col("hPacketField.id") === 0
+              )
+              .select(
+                when(col("hPacketField.id") === hPacketFieldId, col("hPacketField.value.member3").cast("string")).as("TC_H"),
+                when(col("hPacketField.id") === 0, col("hPacketField.value.member1")).as("timestamp")
+              )
+
+    // 2025 -> schema nuovo
+    val df = spark.read.format("avro").schema(schema2).load(path2)
+
+    val df_selected_3 = df.select(
+      explode(map_values(col("fields"))).as("hPacketField")
+    )
+      .filter(
+        col("hPacketField.id") === hPacketFieldId ||
+        col("hPacketField.id") === 0
+      )
+      .select(
+        when(col("hPacketField.id") === hPacketFieldId, col("hPacketField.value.member3").cast("string")).as("TC_H"),
+        when(col("hPacketField.id") === 0, col("hPacketField.value.member1")).as("timestamp")
+      )
+
+    val dfs : Seq[DataFrame] = Seq(df_selected_1, df_selected_2, df_selected_3)
     val schemas = dfs.map(_.schema)
     val unifiedSchema = schemas.reduce((schema1, schema2) => StructType(schema1.fields ++ schema2.fields))
 
@@ -200,10 +230,7 @@ object MonthlyHourReport {
 
     // Unisce i DataFrame in uno unico
     val values: DataFrame = dfsWithUnifiedSchema.reduce(_.union(_))
-
-    println("VALUES pre-count")
-    values.show()
-
+              
     /* Pre processing dati */
     val nodtDF = values.select(col("TC_H").cast("string"))
     val nodt_dateDF = values.select(col("timestamp"))
@@ -218,24 +245,21 @@ object MonthlyHourReport {
     // Merge dataframe using this fake index
     val resultDF = df1WithIndex
       .join(df2WithIndex, Seq("index"))
-      .drop("index") // after join, remove now useless column
+      .drop("index")
 
     // Conversione da epoch millisecondi a Timestamp e poi in formato DD/MM/YYYY
     val updatedDF = resultDF
       .withColumn("timestamp", from_unixtime(col("timestamp") / 1000).cast("timestamp")) // Mantieni TimestampType
 
-    // Ordina per colonna "timestamp"
-    val sortedDF = updatedDF.orderBy("timestamp")
-
-    val Year_MonthDF = updatedDF
+    val year_monthDF = updatedDF
       .withColumn("year", year(to_date(col("timestamp"), "dd/MM/yyyy")))
       .withColumn("month", month(to_date(col("timestamp"),"dd/MM/yyyy")))
 
     // Finestra per ordinare i dati per timestamp
-    val globalWindowSpec = Window.orderBy("timestamp")
+    val globalWindowSpec = Window.orderBy(desc("timestamp"))
 
     // Calcolare il valore precedente
-    val dfWithLag = Year_MonthDF
+    val dfWithLag = year_monthDF
       .withColumn("TC_H", col("TC_H").cast("double"))
       .withColumn("prev_TC_H", lag("TC_H", 1).over(globalWindowSpec))
 
@@ -247,7 +271,6 @@ object MonthlyHourReport {
     val getMonthName = udf((month: Int, year: Int) => {
       s"${Month.of(month).getDisplayName(java.time.format.TextStyle.FULL, Locale.ENGLISH)} $year"})
 
-
     val dfWithDiff = dfWithFirstRowFlag
       .withColumn("TC_H_diff",
         when(col("isFirstRow") === 1,
@@ -257,6 +280,7 @@ object MonthlyHourReport {
                 .otherwise(col("TC_H") - col("prev_TC_H"))
             ))
 
+    // Final result
     val output = dfWithDiff.groupBy("month", "year")
       .agg(
         sum("TC_H_diff").as("total_hours")
@@ -265,7 +289,6 @@ object MonthlyHourReport {
       .withColumn("timestamp", current_timestamp().cast("long"))
       .select("month", "total_hours", "timestamp")
 
-      println("RESULT")
       output.show(12, truncate = false) 
 
     // Retrieve timestamp
