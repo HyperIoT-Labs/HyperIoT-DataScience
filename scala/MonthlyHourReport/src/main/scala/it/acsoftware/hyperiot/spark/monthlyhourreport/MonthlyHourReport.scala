@@ -51,14 +51,7 @@ object MonthlyHourReport {
 
     // Crea un oggetto JSON con tutte le righe
     implicit val formats = Serialization.formats(NoTypeHints)
-    Serialization.write(Map("results" -> rows))
-  }
-
-    def isFileEmpty(fs: FileSystem, filePath: Path): Boolean = {
-    // Ottieni informazioni sul file
-    val fileStatus = fs.getFileStatus(filePath)
-    // Verifica se la dimensione del file è zero
-    fileStatus.getLen == 0
+    Serialization.write(Map("results" -> rows, "customSchema" -> true))
   }
 
   def main(args: Array[String]) = {
