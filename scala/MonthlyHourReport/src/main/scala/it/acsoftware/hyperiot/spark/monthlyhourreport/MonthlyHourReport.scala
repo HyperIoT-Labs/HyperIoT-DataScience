@@ -49,9 +49,11 @@ object MonthlyHourReport {
       Map("grouping" -> groupingValues, "output" -> output)
     })
 
+    val headers = List("month")
+
     // Crea un oggetto JSON con tutte le righe
     implicit val formats = Serialization.formats(NoTypeHints)
-    Serialization.write(Map("results" -> rows, "customSchema" -> true))
+    Serialization.write(Map("results" -> rows, "headers" -> headers, "customSchema" -> true))
   }
 
   def main(args: Array[String]) = {
