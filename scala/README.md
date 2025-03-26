@@ -13,6 +13,7 @@ The statistics available at the moment are (LTS version):
  - CountBy (v 1.0.4)
  - AvgDurationBy (v 1.0.4)
  - MonthlyHourReport (v 1.0.2)
+ - DailyCountBy (v. 1.0.0)
 
 Versions of technologies used in the process:
  
