@@ -17,6 +17,7 @@ scala/GlobalScalarMinimum/project/
 scala/GlobalScalarMaximum/project/
 scala/CountBy/project/
 scala/AvgDurationBy/project/
+scala/AvgDurationBy_level_1/project/
 scala/MonthlyHourReport/project/
 scala/DailyCountBy/project
 
@@ -27,5 +28,6 @@ scala/GlobalScalarMinimum/target/
 scala/GlobalScalarMaximum/target/
 scala/CountBy/target/
 scala/AvgDurationBy/target/
+scala/AvgDurationBy_level_1/target/
 scala/MonthlyHourReport/target/
 scala/DailyCountBy/target/
