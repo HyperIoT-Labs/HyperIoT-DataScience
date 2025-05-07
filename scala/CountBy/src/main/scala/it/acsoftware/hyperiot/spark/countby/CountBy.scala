@@ -17,6 +17,7 @@ import scala.collection.mutable.ArrayBuffer
 import org.json4s._
 import org.json4s.jackson.Serialization
 import java.time.Instant
+import org.apache.spark.sql.Row
 
 object CountBy {
 
@@ -198,9 +199,6 @@ object CountBy {
         // Risultato finale: solo le colonne dinamiche
         val resultDf = finalDf.select(selectedCols.head, selectedCols.tail: _*)
 
-        // Mostra il risultato
-        resultDf.show()
-
         resultDf
 
       } catch {
@@ -221,8 +219,30 @@ object CountBy {
     // Unisce i DataFrame in uno unico
     val values: DataFrame = dfsWithUnifiedSchema.reduce(_.union(_))
 
-    println("VALUES pre-count")
-    values.show()
+    val colNames = values.columns
+
+    val colValues = colNames.map { name =>
+      values.select(name).na.drop().rdd.map(_.get(0))
+    }
+    
+    // Calcola la lunghezza minima per evitare problemi di zip
+    val minLength = colValues.map(_.count).min.toInt
+
+    // Trunca ogni RDD alla lunghezza minima e convertili in Array
+    val truncatedArrays = colValues.map(_.take(minLength))
+
+    // Trasponi: da Array[col1, col2, ...] => Array[riga1, riga2, ...]
+    val rows = truncatedArrays.transpose.map(arr => Row.fromSeq(arr))
+
+    // Crea uno schema dinamico
+    val schema = StructType(colNames.map(name => StructField(name, StringType, nullable = true)))
+
+    // Crea il DataFrame finale
+    val valuesCleaned = spark.createDataFrame(spark.sparkContext.parallelize(rows), schema)
+
+
+    println("VALUES CLEANED pre-count")
+    valuesCleaned.show()
 
     /*
       NEW STRUCTURE -> the name of the column are the ID OF THE FIELD, with every value
@@ -303,7 +323,7 @@ object CountBy {
 
     */
 
-    val output = values
+    val output = valuesCleaned
       .groupBy(hPacketFieldIds.map(id => col(id.toString)): _*)
       .count()
       .withColumnRenamed("count", outputName)
