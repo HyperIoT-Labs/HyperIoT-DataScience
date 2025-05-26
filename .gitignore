@@ -19,7 +19,8 @@ scala/CountBy/project/
 scala/AvgDurationBy/project/
 scala/AvgDurationBy_level_1/project/
 scala/MonthlyHourReport/project/
-scala/DailyCountBy/project
+scala/DailyCountBy/project/
+scala/MinRangeCountBy/project/
 
 # Ignora tutti i file target
 scala/GlobalScalarMean/target/
@@ -31,3 +32,4 @@ scala/AvgDurationBy/target/
 scala/AvgDurationBy_level_1/target/
 scala/MonthlyHourReport/target/
 scala/DailyCountBy/target/
+scala/MinRangeCountBy/target/
