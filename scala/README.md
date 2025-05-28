@@ -15,6 +15,7 @@ The statistics available at the moment are (LTS version):
  - MonthlyHourReport (v 1.0.2)
  - DailyCountBy (v. 1.0.0)
  - MinRangeCountBy (v. 1.0.1)
+ - VisitRate (v. 1.0.2)
 
 Versions of technologies used in the process:
  
