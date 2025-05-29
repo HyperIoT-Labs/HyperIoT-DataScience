@@ -22,6 +22,7 @@ scala/MonthlyHourReport/project/
 scala/DailyCountBy/project/
 scala/MinRangeCountBy/project/
 scala/VisitRate/project/
+scala/MonthlyMinuteReport/project/
 
 # Ignora tutti i file target
 scala/GlobalScalarMean/target/
@@ -35,3 +36,4 @@ scala/MonthlyHourReport/target/
 scala/DailyCountBy/target/
 scala/MinRangeCountBy/target/
 scala/VisitRate/target/
+scala/MonthlyMinuteReport/target/
