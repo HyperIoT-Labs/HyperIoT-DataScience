@@ -238,6 +238,8 @@ object MonthlyMinuteReport {
         .join(df3WithIndex, Seq("index"))
         .drop("index")  // after join, remove now useless column
 
+      resultDF.show(Int.MaxValue, false)
+
       // Compute tot minutes
       val dfWithDuration = resultDF.withColumn("duration", (col("endDate") - col("startDate")) / 60000) // Converte in minuti
       val dfWithTimestamp = dfWithDuration.withColumn("startTimestamp", (col("startDate") / 1000).cast("timestamp"))
