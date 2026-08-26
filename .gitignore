@@ -23,6 +23,8 @@ scala/DailyCountBy/project/
 scala/MinRangeCountBy/project/
 scala/VisitRate/project/
 scala/MonthlyMinuteReport/project/
+scala/DailyCountBy_Knowesis/project/
+scala/DailySum_Knowesis/project/
 
 # Ignora tutti i file target
 scala/GlobalScalarMean/target/
@@ -37,3 +39,5 @@ scala/DailyCountBy/target/
 scala/MinRangeCountBy/target/
 scala/VisitRate/target/
 scala/MonthlyMinuteReport/target/
+scala/DailyCountBy_Knowesis/target/
+scala/DailySum_Knowesis/target/
