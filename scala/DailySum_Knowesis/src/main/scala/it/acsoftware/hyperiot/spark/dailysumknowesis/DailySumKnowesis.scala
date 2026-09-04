@@ -46,7 +46,7 @@ object DailySumKnowesis {
     val rows = df.collect().map(row => {
       // Estrai i valori per ciascun ID dall'array
       val groupingValues = groupingFieldIds.map(id => {
-        val value = row.getAs[String](id.toString)
+        val value = row.getAs[Any](id.toString)
         (id -> value)
       }).toMap
       val output = row.getAs[Double]("output")
@@ -230,13 +230,14 @@ object DailySumKnowesis {
 
     nonNullTimestampDF.show()
 
-    // Nome della colonna contenente la data (formato dd/MM/yyyy) usata come chiave di raggruppamento
+    // Nome della colonna contenente l'epoch second UTC di inizio giornata, usata come chiave di raggruppamento
     val dateColumnName = hPacketFieldIds(1).toString
 
-    // Conversione in data nel formato gg/MM/yyyy
+    // Conversione del timestamp (millisecondi) nell'epoch second UTC di inizio giornata,
+    // usato poi per costruire la chiave HBase a tempo invertito (Long.MaxValue - epochSecondUTC)
     val nonNullTimestampFormattedDF = nonNullTimestampDF.withColumn(
       dateColumnName,
-      date_format((col(dateColumnName) / 1000).cast("timestamp"), "dd/MM/yyyy")
+      (col(dateColumnName) / 1000 / 86400).cast("long") * 86400
     )
 
     val df1WithIndex = nonNullValueDF.withColumn("index", monotonically_increasing_id())
@@ -278,14 +279,19 @@ object DailySumKnowesis {
     // Se true, una riga HBase gia' esistente per una data viene sovrascritta; se false viene lasciata invariata
     val overwrite = false
 
-    // Elenco delle date distinte presenti nel risultato
-    val distinctDates = output.select(dateColumnName).distinct().collect().map(_.getString(0))
+    // Elenco degli epoch second UTC (inizio giornata) distinti presenti nel risultato
+    val distinctDates = output.select(dateColumnName).distinct().collect().map(_.getAs[Long](0))
 
-    // Scrivi una riga HBase per ciascuna data, con chiave projectId_hProjectAlgorithmName_data
-    distinctDates.foreach { date =>
-      val dailyOutput = output.filter(col(dateColumnName) === date)
+    // Scrivi una riga HBase per ciascuna data, con chiave projectId_hProjectAlgorithmName_suffix
+    // dove suffix = Long.MaxValue - epochMillisUTC, con padding a 19 cifre (lunghezza di Long.MaxValue)
+    // cosi' l'ordinamento lessicografico delle chiavi HBase corrisponde a un ordinamento a tempo invertito,
+    // come richiesto dal nuovo endpoint timerange che scandisce HBase per chiave numerica
+    distinctDates.foreach { epochSecondUTC =>
+      val dailyOutput = output.filter(col(dateColumnName) === epochSecondUTC)
       val jsonData = concatenateRowsToJson(dailyOutput, Array(hPacketFieldIds(1)))
-      val rowKey = projectId + "_" + hProjectAlgorithmName + "_" + date
+      val epochMillisUTC = epochSecondUTC * 1000
+      val invertedTimeSuffix = f"${Long.MaxValue - epochMillisUTC}%019d"
+      val rowKey = projectId + "_" + hProjectAlgorithmName + "_" + invertedTimeSuffix
       writeToHBase(rowKey, jsonData, hBaseTable, overwrite)
     }
 

@@ -18,7 +18,7 @@ libraryDependencies += "io.circe" %% "circe-generic" % circeVersion
 libraryDependencies += "io.circe" %% "circe-optics" % circeVersion
 libraryDependencies += "io.circe" %% "circe-parser" % circeVersion
 
-mainClass := Some("it.acsoftware.hyperiot.spark.dailycountby.DailyCountByKnowesis")
+mainClass := Some("it.acsoftware.hyperiot.spark.dailycountbyknowesis.DailyCountByKnowesis")
 
 assemblyMergeStrategy in assembly := {
   case PathList("META-INF", xs@_*) => MergeStrategy.discard
