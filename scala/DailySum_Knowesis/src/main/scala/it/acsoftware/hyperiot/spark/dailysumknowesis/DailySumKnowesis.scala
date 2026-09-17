@@ -166,11 +166,15 @@ object DailySumKnowesis {
 
       try {
 
+        // Aggiungo un id di evento stabile PRIMA dell'explode, cosi' posso ricompattare
+        // correttamente i campi esplosi appartenenti allo stesso evento (vedi piu' sotto)
         val df = spark.read.format("avro").load(file)
+          .withColumn("__event_id", monotonically_increasing_id())
 
-        val transformedDf = df.select(explode(map_values(col("fields"))).as("hPacketField"))
+        val transformedDf = df.select(col("__event_id"), explode(map_values(col("fields"))).as("hPacketField"))
           .filter(col("hPacketField.id").isin(hPacketFieldIds: _*))  // Filtra per gli ID
           .select(
+            col("__event_id"),
             col("hPacketField.id"),
             coalesce(
               col("hPacketField.value.member0").cast("string"),
@@ -188,11 +192,15 @@ object DailySumKnowesis {
           finalDf = finalDf.withColumn(s"$id", when(col("id") === id, col("value")).otherwise(lit(null)))
         }
 
-        // Seleziona solo le colonne che abbiamo creato dinamicamente (senza 'id' o altre colonne non necessarie)
-        val selectedCols = hPacketFieldIds.map(id => s"$id")
-
-        // Risultato finale: solo le colonne dinamiche
-        val resultDf = finalDf.select(selectedCols.head, selectedCols.tail: _*)
+        // Un singolo evento genera una riga esplosa per ogni field id trovato al suo interno:
+        // le ricompatto in un'unica riga per evento (raggruppando per __event_id), cosi' i valori
+        // dei diversi campi restano associati allo stesso evento originale invece di finire
+        // su righe separate con gli altri campi a null.
+        val aggCols = hPacketFieldIds.map(id => first(col(id.toString), ignoreNulls = true).as(id.toString))
+        val resultDf = finalDf
+          .groupBy("__event_id")
+          .agg(aggCols.head, aggCols.tail: _*)
+          .drop("__event_id")
 
         // Mostra il risultato
         resultDf.show()
@@ -220,34 +228,25 @@ object DailySumKnowesis {
     println("VALUES pre-sum")
     values.show()
 
-    // Split dataframe in each column - il campo 0 e' il valore numerico da sommare, il campo 1 e' il timestamp
-    val valueDF = values.select(col(hPacketFieldIds(0).toString).cast("double"))
-    val timestampDF = values.select(col(hPacketFieldIds(1).toString))
-
-    // Remove null values
-    val nonNullValueDF = valueDF.na.drop()
-    val nonNullTimestampDF = timestampDF.na.drop()
-
-    nonNullTimestampDF.show()
-
     // Nome della colonna contenente l'epoch second UTC di inizio giornata, usata come chiave di raggruppamento
     val dateColumnName = hPacketFieldIds(1).toString
 
-    // Conversione del timestamp (millisecondi) nell'epoch second UTC di inizio giornata,
-    // usato poi per costruire la chiave HBase a tempo invertito (Long.MaxValue - epochSecondUTC)
-    val nonNullTimestampFormattedDF = nonNullTimestampDF.withColumn(
-      dateColumnName,
-      (col(dateColumnName) / 1000 / 86400).cast("long") * 86400
-    )
+    // Tieni solo gli eventi che hanno sia il valore (hPacketFieldIds(0)) sia la data (hPacketFieldIds(1)):
+    // ogni riga di "values" rappresenta gia' un unico evento con entrambi i campi valorizzati nella
+    // stessa riga (vedi il collapse per __event_id fatto sopra durante la lettura dei file), quindi
+    // non serve piu' ricostruire l'accoppiamento con un indice fittizio.
+    val nonNullValues = values.na.drop(Seq(hPacketFieldIds(0).toString, dateColumnName))
 
-    val df1WithIndex = nonNullValueDF.withColumn("index", monotonically_increasing_id())
-    val df2WithIndex = nonNullTimestampFormattedDF.withColumn("index", monotonically_increasing_id())
+    nonNullValues.show()
 
-    // Merge dataframe using this fake index
-    val resultDF = df1WithIndex
-      .join(df2WithIndex, Seq("index"))
-      .drop("index")  // after join, remove now useless column
-
+    // Conversione della data (stringa "dd/MM/yyyy HH.mm.ss", non un epoch millis!) nell'epoch second UTC
+    // di inizio giornata, usato poi per costruire la chiave HBase a tempo invertito (Long.MaxValue - epochSecondUTC)
+    val resultDF = nonNullValues
+      .withColumn(hPacketFieldIds(0).toString, col(hPacketFieldIds(0).toString).cast("double"))
+      .withColumn(
+        dateColumnName,
+        (unix_timestamp(col(dateColumnName), "dd/MM/yyyy HH.mm.ss") / 86400).cast("long") * 86400
+      )
 
     resultDF.show()
 
@@ -283,14 +282,13 @@ object DailySumKnowesis {
     val distinctDates = output.select(dateColumnName).distinct().collect().map(_.getAs[Long](0))
 
     // Scrivi una riga HBase per ciascuna data, con chiave projectId_hProjectAlgorithmName_suffix
-    // dove suffix = Long.MaxValue - epochMillisUTC, con padding a 19 cifre (lunghezza di Long.MaxValue)
+    // dove suffix = Long.MaxValue - epochSecondUTC, con padding a 19 cifre (lunghezza di Long.MaxValue)
     // cosi' l'ordinamento lessicografico delle chiavi HBase corrisponde a un ordinamento a tempo invertito,
     // come richiesto dal nuovo endpoint timerange che scandisce HBase per chiave numerica
     distinctDates.foreach { epochSecondUTC =>
       val dailyOutput = output.filter(col(dateColumnName) === epochSecondUTC)
       val jsonData = concatenateRowsToJson(dailyOutput, Array(hPacketFieldIds(1)))
-      val epochMillisUTC = epochSecondUTC * 1000
-      val invertedTimeSuffix = f"${Long.MaxValue - epochMillisUTC}%019d"
+      val invertedTimeSuffix = f"${Long.MaxValue - epochSecondUTC}%019d"
       val rowKey = projectId + "_" + hProjectAlgorithmName + "_" + invertedTimeSuffix
       writeToHBase(rowKey, jsonData, hBaseTable, overwrite)
     }
