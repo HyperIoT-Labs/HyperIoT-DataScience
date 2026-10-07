@@ -11,7 +11,7 @@ import org.apache.hadoop.hbase.{HBaseConfiguration, TableName}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 import org.apache.hadoop.fs.{FileSystem, Path}
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.{Column, DataFrame, SparkSession}
 import org.apache.spark.sql.types._
 import scala.collection.mutable.ArrayBuffer
 import org.json4s._
@@ -38,6 +38,19 @@ object DailySumKnowesis {
       put.addColumn(Bytes.toBytes("value"), Bytes.toBytes("output"), Bytes.toBytes(value))
       hBaseTable.put(put)
     }
+  }
+
+  // Prova piu' formati di data in cascata (coalesce): il campo arriva come stringa e il formato
+  // cambia a seconda del device/periodo di acquisizione (es. ISO-8601 oppure "dd/MM/yyyy HH.mm.ss"),
+  // quindi la conversione deve essere resiliente e non assumere un unico formato fisso.
+  def parseFlexibleTimestamp(c: Column): Column = {
+    coalesce(
+      c.cast("timestamp"),                         // ISO-8601 e affini: "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]", "yyyy-MM-dd HH:mm:ss", ...
+      to_timestamp(c, "dd/MM/yyyy HH.mm.ss"),       // es. "02/12/2025 07.40.06"
+      to_timestamp(c, "dd/MM/yyyy HH:mm:ss"),       // es. "02/12/2025 07:40:06"
+      to_timestamp(c, "dd/MM/yyyy"),                // solo data, es. "02/12/2025"
+      (c.cast("double") / 1000).cast("timestamp")   // epoch millis gia' numerico (come stringa o numero)
+    )
   }
 
   // Method used to concatenate rows of dataFrame into unique JSON object
@@ -239,14 +252,14 @@ object DailySumKnowesis {
 
     nonNullValues.show()
 
-    // Conversione della data (stringa "dd/MM/yyyy HH.mm.ss", non un epoch millis!) nell'epoch second UTC
-    // di inizio giornata, usato poi per costruire la chiave HBase a tempo invertito (Long.MaxValue - epochSecondUTC)
+    // Conversione della data (stringa in uno dei formati gestiti da parseFlexibleTimestamp, non un
+    // epoch millis!) nell'epoch second UTC di inizio giornata, usato poi per costruire la chiave
+    // HBase a tempo invertito (Long.MaxValue - epochSecondUTC)
     val resultDF = nonNullValues
       .withColumn(hPacketFieldIds(0).toString, col(hPacketFieldIds(0).toString).cast("double"))
-      .withColumn(
-        dateColumnName,
-        (unix_timestamp(col(dateColumnName), "dd/MM/yyyy HH.mm.ss") / 86400).cast("long") * 86400
-      )
+      .withColumn(dateColumnName, parseFlexibleTimestamp(col(dateColumnName)))
+      .filter(col(dateColumnName).isNotNull) // scarta le righe la cui data non e' in nessuno dei formati gestiti
+      .withColumn(dateColumnName, (col(dateColumnName).cast("long") / 86400).cast("long") * 86400)
 
     resultDF.show()
 
