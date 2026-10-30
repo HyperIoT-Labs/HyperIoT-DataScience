@@ -26,6 +26,7 @@ scala/MonthlyMinuteReport/project/
 scala/DailyCountBy_Knowesis/project/
 scala/DailySum_Knowesis/project/
 scala/DailyHourReport_Knowesis/project/
+scala/WeeklyCountBy/project/
 
 # Ignora tutti i file target
 scala/GlobalScalarMean/target/
@@ -43,3 +44,4 @@ scala/MonthlyMinuteReport/target/
 scala/DailyCountBy_Knowesis/target/
 scala/DailySum_Knowesis/target/
 scala/DailyHourReport_Knowesis/target/
+scala/WeeklyCountBy/target/
